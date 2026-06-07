@@ -1,4 +1,5 @@
 """Database manager for persistent storage."""
+from __future__ import annotations
 from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, Engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session as SQLSession
@@ -21,6 +22,7 @@ class Interaction(Base):
     agent_name = Column(String(100))
     query = Column(Text)
     response = Column(Text)
+    metadata_json = Column(Text, default='{}')
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 class StudentProfile(Base):
@@ -54,6 +56,19 @@ class DBManager:
             cls._instance = super(DBManager, cls).__new__(cls)
             db_uri = os.getenv("DATABASE_URI", "sqlite:///ai_tutor.db")
             cls._instance.engine = create_engine(db_uri, echo=False)
+            
+            # Enable WAL mode and other optimizations for SQLite
+            if db_uri.startswith("sqlite"):
+                from sqlalchemy import event
+                @event.listens_for(cls._instance.engine, "connect")
+                def set_sqlite_pragma(dbapi_connection, connection_record):
+                    cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA cache_size=-64000")
+                    cursor.execute("PRAGMA temp_store=MEMORY")
+                    cursor.close()
+
             Base.metadata.create_all(cls._instance.engine)
             cls._instance.Session = sessionmaker(bind=cls._instance.engine)
             
@@ -115,6 +130,15 @@ class DBManager:
                     except Exception as e:
                         print(f"⚠️ Migration warning: {e}")
                         
+            # Check interactions table for metadata_json
+            interactions_cols = [info[1] for info in cursor.execute("PRAGMA table_info(interactions)").fetchall()]
+            if 'metadata_json' not in interactions_cols:
+                try:
+                    cursor.execute("ALTER TABLE interactions ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+                    conn.commit()
+                except Exception as e:
+                    print(f"⚠️ Migration warning (interactions): {e}")
+
             conn.close()
         except Exception as e:
             print(f"⚠️ DB Migration check failed: {e}")
@@ -150,7 +174,7 @@ class DBManager:
     
 
     def log_interaction(self, session_id: str, user_id: str, agent_name: str, 
-                       query: str, response: str) -> bool:
+                       query: str, response: str, metadata_json: str = '{}') -> bool:
         """Log an interaction to the database."""
         session = self.get_session()
         try:
@@ -159,7 +183,8 @@ class DBManager:
                 user_id=user_id,
                 agent_name=agent_name,
                 query=query,
-                response=response
+                response=response,
+                metadata_json=metadata_json
             )
             session.add(interaction)
             session.commit()
@@ -170,7 +195,7 @@ class DBManager:
         finally:
             session.close()
 
-    def get_chat_history(self, user_id: str, session_id: str = None, limit: int = 20) -> list:
+    def get_chat_history(self, user_id: str, session_id: str = None, limit: int = 10) -> list:
         """Get recent chat history for a user, optionally filtered by session."""
         session = self.get_session()
         try:
@@ -186,6 +211,7 @@ class DBManager:
                 "agent": i.agent_name,
                 "query": i.query,
                 "response": i.response if i.response else "Thinking...", # Handle pending
+                "metadata": i.metadata_json,
                 "timestamp": i.timestamp.isoformat()
             } for i in reversed(interactions)]
         finally:
@@ -247,6 +273,10 @@ class DBManager:
         """Create a new learning path."""
         session = self.get_session()
         try:
+            existing = session.query(LearningPath).filter_by(session_id=session_id).first()
+            if existing:
+                return True # Already exists for this session
+                
             path = LearningPath(
                 user_id=user_id,
                 session_id=session_id,

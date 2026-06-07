@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Tutor Platform</title>
+    <meta name="description" content="AI-Powered Personalized Learning Paths and Resume Analysis">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Auth Overlay -->
+    <div id="auth-section">
+        <div class="glass-panel auth-card">
+            <h2 style="margin-bottom: 24px; font-family: 'Outfit';">Welcome to AI Tutor</h2>
+            <input type="text" id="username" class="input-field" placeholder="Choose a Username">
+            <button id="login-btn" class="btn btn-primary">Join Platform</button>
+        </div>
+    </div>
+
+    <!-- Main Sidebar -->
+    <aside id="sidebar" class="glass-panel">
+        <div class="logo-area">
+            <span class="logo-icon">▲</span>
+            <span>AI Tutor</span>
+        </div>
+
+        <div class="dashboard-widget">
+            <div class="widget-title">Active Journey</div>
+            <div id="active-path-container" style="padding: 12px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+                <p style="font-size: 14px; color: var(--text-muted);">No active path. Upload resume or ask to learn!</p>
+            </div>
+        </div>
+
+        <div class="dashboard-widget">
+            <div class="widget-title">Resume Analyzer</div>
+            <div class="dropzone" id="resume-drop">
+                <span style="font-size: 24px;">📄</span>
+                <p style="font-size: 13px; margin-top: 8px; color: var(--text-muted);">Drop Resume / List Skills to analyze</p>
+            </div>
+        </div>
+        
+        <div style="margin-top: auto;">
+            <div class="widget-title" id="user-display">Student</div>
+        </div>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <main id="main-view" class="glass-panel">
+        <div id="chat-history">
+            <!-- Messages inserted here via JS -->
+            <div class="message bot">
+                <div class="msg-avatar">🤖</div>
+                <div class="msg-bubble">
+                    <p><strong>AI Tutor</strong></p>
+                    <p>Welcome! I'm here to analyze your current skills and build a personalized curriculum. What job role are you targeting?</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <input type="text" id="chat-input" placeholder="Type a message or paste your skills here..." autocomplete="off">
+            <button id="send-btn">➤</button>
+        </div>
+    </main>
+
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

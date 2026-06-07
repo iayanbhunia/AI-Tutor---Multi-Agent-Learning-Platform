@@ -1,9 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
+import re
 import sys
 import os
 import uuid
 from google.adk.runners import Runner
-from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 from dotenv import load_dotenv
 
@@ -18,19 +20,21 @@ from ai_tutor_agent.agent import root_agent
 
 st.set_page_config(page_title="AI Tutor Platform", page_icon="🎓", layout="wide")
 
-# Initialize session state
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
-if "username" not in st.session_state:
-    st.session_state.username = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-if "sidebar_view" not in st.session_state:
-    st.session_state.sidebar_view = "list" # 'list' or 'detail'
+def render_message_with_mermaid(text: str):
+    import base64
+    parts = re.split(r'```mermaid\n(.*?)```', text, flags=re.DOTALL)
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            if part.strip():
+                st.markdown(part)
+        else:
+            try:
+                # Convert mermaid string to base64 for server-side image rendering
+                b64 = base64.b64encode(part.encode('utf-8')).decode('utf-8')
+                st.image(f"https://mermaid.ink/img/{b64}")
+            except Exception as e:
+                # Fallback to code block if it fails
+                st.code(part, language="mermaid")
 
 # Initialize session state
 if "authenticated" not in st.session_state:
@@ -45,11 +49,17 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "sidebar_view" not in st.session_state:
     st.session_state.sidebar_view = "list" # 'list' or 'detail'
-
 
 @st.cache_resource
 def get_runner():
-    session_service = InMemorySessionService()
+    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ai_tutor.db'))
+    db_url = os.getenv("DATABASE_URI", f"sqlite:///{db_path}")
+    if db_url.startswith("sqlite:///"):
+        adk_db_url = db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
+    else:
+        adk_db_url = db_url
+
+    session_service = DatabaseSessionService(db_url=adk_db_url)
     runner = Runner(
         app_name="ai_tutor",
         agent=root_agent,
@@ -108,43 +118,240 @@ def login_page():
                 st.session_state.agent_notified = False  # Reset notification state
                 st.rerun()
 
+def get_onboarding_runner():
+    from google.adk.runners import Runner
+    from google.adk.sessions import DatabaseSessionService
+    from ai_tutor_agent.subagents.onboarding_agent.agent import onboarding_agent
+    import os
+    if "wiz_runner" not in st.session_state:
+        db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ai_tutor.db'))
+        db_url = os.getenv("DATABASE_URI", f"sqlite:///{db_path}")
+        if db_url.startswith("sqlite:///"):
+            adk_db_url = db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
+        else:
+            adk_db_url = db_url
+
+        session_service = DatabaseSessionService(db_url=adk_db_url)
+        st.session_state.wiz_runner = Runner(
+            app_name="ai_tutor_wizard",
+            agent=onboarding_agent,
+            session_service=session_service
+        )
+    return st.session_state.wiz_runner
+
+@st.dialog("🎓 Start a New Subject")
+def onboarding_wizard():
+    import json
+    import re
+    import uuid
+    import asyncio
+    
+    if "wiz_step" not in st.session_state:
+        st.session_state.wiz_step = 0
+        st.session_state.wiz_subject = ""
+        st.session_state.wiz_level = "Beginner"
+        st.session_state.wiz_state_json = None
+        import uuid
+        st.session_state.wiz_session_id = f"wiz_{uuid.uuid4().hex}"
+        
+        runner = get_onboarding_runner()
+        import asyncio
+        def get_or_create_loop():
+            try:
+                return asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                return loop
+        loop = get_or_create_loop()
+        loop.run_until_complete(
+             runner.session_service.create_session(
+                app_name="ai_tutor_wizard",
+                user_id=st.session_state.user_id,
+                session_id=st.session_state.wiz_session_id,
+                state={}
+            )
+        )
+
+    if st.session_state.wiz_step == 0:
+        st.write("What would you like to learn today?")
+        subject = st.text_input("Subject (e.g., Python, System Design, DSA)")
+        level = st.selectbox("Your current experience level", ["Beginner", "Intermediate", "Advanced"])
+        if st.button("Next"):
+            if subject.strip():
+                st.session_state.wiz_subject = subject
+                st.session_state.wiz_level = level
+                
+                with st.spinner("Analyzing..."):
+                    runner = get_onboarding_runner()
+                    prompt = f"Student wants to learn: {subject}. Experience level: {level}."
+                    
+                    from google.genai import types
+                    response_text = ""
+                    for event in runner.run(
+                        user_id=st.session_state.user_id,
+                        session_id=st.session_state.wiz_session_id,
+                        new_message=types.Content(role="user", parts=[types.Part(text=prompt)])
+                    ):
+                        if getattr(event, "content", None) and getattr(event.content, "parts", None):
+                            for p in event.content.parts:
+                                if getattr(p, "text", None):
+                                    response_text += p.text
+                    
+                    import json, re
+                    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if match:
+                        try:
+                            st.session_state.wiz_state_json = json.loads(match.group(0))
+                            if st.session_state.wiz_state_json.get("status") == "complete":
+                                st.session_state.wiz_step = 2
+                            else:
+                                st.session_state.wiz_step = 1
+                        except:
+                            st.error("Failed to parse AI response.")
+                    else:
+                        # Fallback if AI messes up
+                        st.session_state.wiz_state_json = {"status": "complete", "syllabus": [{"module": "1. Introduction", "status": "pending", "subtopics": ["Getting Started"]}]}
+                        st.session_state.wiz_step = 2
+                st.rerun()
+            else:
+                st.error("Please enter a subject.")
+
+    elif st.session_state.wiz_step == 1:
+        state_data = st.session_state.wiz_state_json
+        if state_data.get("status") == "asking":
+            st.write("To personalize your syllabus, please answer these questions:")
+            answers = {}
+            for q in state_data.get("questions", []):
+                if q.get("type") == "multiple_choice" and "options" in q:
+                    answers[q["id"]] = st.radio(q["text"], q["options"], key=f"q_{q['id']}")
+                else:
+                    answers[q["id"]] = st.text_input(q["text"], key=f"q_{q['id']}")
+                    
+            if st.button("Submit Answers"):
+                ans_str = json.dumps(answers)
+                with st.spinner("Processing..."):
+                    runner = get_onboarding_runner()
+                    prompt = f"Student answers: {ans_str}"
+                    
+                    from google.genai import types
+                    response_text = ""
+                    for event in runner.run(
+                        user_id=st.session_state.user_id,
+                        session_id=st.session_state.wiz_session_id,
+                        new_message=types.Content(role="user", parts=[types.Part(text=prompt)])
+                    ):
+                        if getattr(event, "content", None) and getattr(event.content, "parts", None):
+                            for p in event.content.parts:
+                                if getattr(p, "text", None):
+                                    response_text += p.text
+                                    
+                    import json, re
+                    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if match:
+                        try:
+                            new_state = json.loads(match.group(0))
+                            st.session_state.wiz_state_json = new_state
+                            if new_state.get("status") == "complete":
+                                st.session_state.wiz_step = 2
+                        except Exception as e:
+                            st.error(f"Error parsing next step: {e}")
+                st.rerun()
+                
+        elif state_data.get("status") == "complete":
+             st.session_state.wiz_step = 2
+             st.rerun()
+             
+    if st.session_state.wiz_step == 2:
+        st.write("Generating your personalized syllabus...")
+        with st.spinner("Finishing up..."):
+            syllabus_data = st.session_state.wiz_state_json.get("syllabus", [])
+            if not syllabus_data:
+                syllabus_data = [{"module": "1. Introduction", "status": "pending", "subtopics": ["Getting Started"]}]
+            
+            syllabus_dict = {"syllabus": syllabus_data} if isinstance(syllabus_data, list) else syllabus_data
+            
+            # create path and details
+            import uuid
+            new_session_id = str(uuid.uuid4())
+            title = st.session_state.wiz_subject.replace("_", " ").title()
+            
+            from ai_tutor_agent.utils.db_manager import db_manager
+            db_manager.create_learning_path(
+                user_id=st.session_state.user_id,
+                session_id=new_session_id,
+                subject=st.session_state.wiz_subject.lower(),
+                title=title
+            )
+            
+            import json
+            db_manager.update_learning_path_details(new_session_id, json.dumps(syllabus_dict))
+            db_manager.update_student_profile(st.session_state.user_id, st.session_state.wiz_subject.lower(), st.session_state.wiz_level)
+            
+            # Reset and redirect
+            st.session_state.session_id = new_session_id
+            st.session_state.messages = [{
+                "role": "assistant",
+                "content": f"Welcome! I've created your personalized syllabus for **{st.session_state.wiz_subject.title()}**. Take a look at the sidebar, and let me know when you're ready to start the first module!",
+                "sender_name": "AI Tutor"
+            }]
+            st.session_state.agent_notified = True
+            st.session_state.sidebar_view = 'detail'
+            st.session_state.show_wizard = False
+            
+            # Clear wizard state
+            for k in list(st.session_state.keys()):
+                if k.startswith("wiz_"):
+                    del st.session_state[k]
+                    
+            st.rerun()
+
 def chat_page():
     runner = get_runner()
     
-    # Ensure session exists in runner
-    try:
-        runner.session_service.get_session_sync(
-            app_name="ai_tutor",
-            user_id=st.session_state.user_id,
-            session_id=st.session_state.session_id
-        )
-    except Exception:
-        pass # Session might not exist yet, will create if needed or handle below
-
-    # Create session if it doesn't exist (e.g., server restart or new user)
-    if not runner.session_service.get_session_sync(
-        app_name="ai_tutor",
-        user_id=st.session_state.user_id,
-        session_id=st.session_state.session_id
-    ):
-         session = runner.session_service.create_session_sync(
-            app_name="ai_tutor",
-            user_id=st.session_state.user_id,
-            session_id=st.session_state.session_id,
-            state={
-                "authenticated": True,
-                "current_user_id": st.session_state.user_id,
-                f"user:{st.session_state.user_id}_name": st.session_state.username,
-                "session_id": st.session_state.session_id 
-            }
-        )
-         # CRITICAL: If we had to recreate the session, the backend lost context.
-         # We must resend the [System] login notification.
-         st.session_state.agent_notified = False
-
+    import asyncio
+    
+    def get_or_create_loop():
+        try:
+            return asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop
+            
+    loop = get_or_create_loop()
+    
     # 1. Identify Current Path from Session ID
     paths = db_manager.get_learning_paths(st.session_state.user_id)
     current_path = next((p for p in paths if p['session_id'] == st.session_state.session_id), None)
+    
+    # Ensure session exists in runner
+    from google.adk.errors.session_not_found_error import SessionNotFoundError
+    try:
+        loop.run_until_complete(
+            runner.session_service.get_session(
+                app_name="ai_tutor",
+                user_id=st.session_state.user_id,
+                session_id=st.session_state.session_id
+            )
+        )
+    except SessionNotFoundError:
+        # Create session if it doesn't exist
+        state_dict = {
+            "authenticated": True,
+            "current_user_id": st.session_state.user_id,
+            f"user:{st.session_state.user_id}_name": st.session_state.username,
+            "session_id": st.session_state.session_id 
+        }
+        loop.run_until_complete(
+             runner.session_service.create_session(
+                app_name="ai_tutor",
+                user_id=st.session_state.user_id,
+                session_id=st.session_state.session_id,
+                state=state_dict
+            )
+        )
+        st.session_state.agent_notified = False
 
     # 2. Load history from DB if message are empty (reloading/switching)
     is_new_session = False
@@ -166,6 +373,42 @@ def chat_page():
         if st.button("Logout"):
             st.session_state.clear()
             st.rerun()
+            
+        st.divider()
+        
+        # --- MODEL SETTINGS ---
+        st.markdown("### ⚙️ Settings")
+        if "model_mode" not in st.session_state:
+            st.session_state.model_mode = "Online (Gemini)"
+            
+        new_model_mode = st.radio("AI Engine", ["Online (Gemini)", "Local (Ollama)"], index=0 if st.session_state.model_mode == "Online (Gemini)" else 1)
+        
+        if new_model_mode != st.session_state.model_mode:
+            st.session_state.model_mode = new_model_mode
+            st.rerun()
+
+        def update_agent_models(target_model):
+            """Update model on root + all sub_agents."""
+            from google.adk.models.lite_llm import LiteLlm
+            if isinstance(target_model, str) and "/" in target_model:
+                model_obj = LiteLlm(model=target_model)
+            else:
+                model_obj = target_model
+            root_agent.model = model_obj
+            # Update sub_agents (not tools anymore)
+            for sub in getattr(root_agent, 'sub_agents', []):
+                sub.model = model_obj
+
+        if st.session_state.model_mode == "Local (Ollama)":
+            local_model = "ollama/llama3.1"
+            update_agent_models(local_model)
+            st.caption(f"🦙 Local: `{local_model}`")
+        else:
+            if "GOOGLE_GEMINI_BASE_URL" in os.environ:
+                del os.environ["GOOGLE_GEMINI_BASE_URL"]
+            online_model = "gemini-2.5-flash"
+            update_agent_models(online_model)
+            st.caption(f"☁️ Online: `{online_model}`")
             
         st.divider()
         
@@ -257,11 +500,10 @@ def chat_page():
         else:
             # === ROOT VIEW (List Paths) ===
             if st.button("➕ New Chat", use_container_width=True):
-                st.session_state.session_id = str(uuid.uuid4())
-                st.session_state.messages = []
-                st.session_state.agent_notified = False
-                st.session_state.sidebar_view = 'list' # Stay in list view for new chat
-                st.rerun()
+                st.session_state.show_wizard = True
+                
+            if st.session_state.get("show_wizard", False):
+                onboarding_wizard()
                 
             st.subheader("Learning Paths")
             
@@ -285,38 +527,16 @@ def chat_page():
             else:
                 st.info("Start chatting to create a path!")
 
-    # 4. Auto-Login Notification (System Message)
+    # 4. Auto-Login Notification
     if not st.session_state.get("agent_notified", False):
         try:
-             # Determine system message based on session type
             if is_new_session and not current_path:
-                 sys_msg = (
-                    f"[System] New user/guest '{st.session_state.username}' (ID: {st.session_state.user_id}) has joined in a blank session. "
-                    "Greet them enthusiastically and ASK what they want to learn today (DSA, Dev, System Design?). "
-                    "If they pick a topic, use `create_learning_path_tool`."
-                )
-            elif is_new_session and current_path:
-                 sys_msg = f"[System] User resumed Learning Path '{current_path['title']}'. Welcome them back and check context."
-            else:
-                 # Just reconnected
-                sys_msg = f"[System] User '{st.session_state.username}' connected."
-            
-            # Inject student profile summary if available? 
-            # (Maybe not necessary if resuming path, agent has history. But good for new chat context inheritance if we implemented that logic. 
-            # The tool will handle inheritance, so here we just notify.)
-            
-            # We run this silently to set context
-            for event in runner.run(
-                user_id=st.session_state.user_id,
-                session_id=st.session_state.session_id,
-                new_message=types.Content(role="user", parts=[types.Part(text=sys_msg)])
-            ):
-                # If it's a new session, we show the greeting
-                if is_new_session and event.content and event.content.parts:
-                    for part in event.content.parts:
-                        if part.text:
-                            st.session_state.messages.append({"role": "assistant", "content": part.text})
-                
+                # Add a local greeting instead of blocking the UI with a synchronous LLM generation
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": f"Welcome {st.session_state.username}! I am your AI Tutor. What would you like to learn today? (e.g., DSA, React, System Design)",
+                    "sender_name": "AI Tutor"
+                })
             st.session_state.agent_notified = True
         except Exception as e:
             st.error(f"Failed to notify agent of login: {e}")
@@ -367,7 +587,7 @@ def chat_page():
 
         with st.chat_message(name=display_name, avatar=avatar):
             st.write(f"**{display_name}**")
-            st.markdown(content)
+            render_message_with_mermaid(content)
 
     if prompt := st.chat_input("Ask me anything about DSA, System Design, or Coding..."):
         # Add user message
@@ -383,25 +603,99 @@ def chat_page():
         
         # Generate response
         with st.chat_message("AI Tutor", avatar="🤖"):
-             with st.spinner("Thinking..."):
+             with st.status("Agent is analyzing request...", expanded=True) as status:
                 try:
                     # Run agent via Runner
                     response_text = ""
                     last_author = "root_agent" 
-                    
+                    turn_count = 0
+                    llm_prompt = prompt
+                    # Inject syllabus to ensure context, especially at start of session
+                    if current_path and current_path.get('syllabus') and current_path.get('syllabus') != '{}':
+                        if len(st.session_state.messages) <= 2 or len(prompt) < 30:
+                            llm_prompt = f"[SYSTEM CONTEXT: The active syllabus for {current_path['subject']} is: {current_path['syllabus']}]\n\nUser Request: {prompt}"
+                            
                     for event in runner.run(
                         user_id=st.session_state.user_id,
                         session_id=st.session_state.session_id,
-                        new_message=types.Content(role="user", parts=[types.Part(text=prompt)])
+                        new_message=types.Content(role="user", parts=[types.Part(text=llm_prompt)])
                     ):
+                        turn_count += 1
+                        if turn_count > 8:
+                            status.write("🛑 Agent is looping. Forcing a stop to save resources.")
+                            if not response_text:
+                                response_text = "I apologize, but I got confused while routing your request. Could you rephrase it simply?"
+                            break
+                            
+                        if getattr(event, 'author', None):
+                            last_author = event.author
+                            
                         if event.content and event.content.parts:
-                            if event.author:
-                                last_author = event.author
                             for part in event.content.parts:
-                                if part.text:
+                                if getattr(part, 'function_call', None):
+                                    fname = part.function_call.name
+                                    if fname == 'transfer_to_agent':
+                                        agent_name = ''
+                                        try:
+                                            agent_name = part.function_call.args.get('agent_name', '')
+                                        except Exception:
+                                            pass
+                                        friendly = agent_name.replace('_', ' ').title()
+                                        status.write(f"🔀 Routing to **{friendly}**...")
+                                    elif 'learning_path' in fname or 'create_learning' in fname:
+                                        status.write(f"📚 Setting up learning path...")
+                                    elif 'search' in fname:
+                                        status.write(f"🔍 Searching the Web...")
+                                    else:
+                                        status.write(f"⚙️ Running: `{fname}`...")
+                                        
+                                if getattr(part, 'text', None):
                                     response_text += part.text
                     
+                    status.update(label="Response ready!", state="complete", expanded=False)
+                    
                     if response_text:
+                        import json
+                        import re
+                        try:
+                            # Catch perfect JSON leaks
+                            parsed = json.loads(response_text.strip())
+                            if isinstance(parsed, dict) and "thought" in parsed:
+                                response_text = "I'm analyzing the best learning paths for that topic..."
+                        except Exception:
+                            pass
+                            
+                        # Robust cleanup for Llama 3/Local models leaking partial JSON tool calls and internal thoughts
+                        # Matches things like {"name": "...", "arguments": {"}}
+                        response_text = re.sub(r'\{[^}]*"name"\s*:\s*"[^"]*".*?\}\}?', '', response_text, flags=re.DOTALL)
+                        response_text = re.sub(r'\{[^}]*":\s*"log_conversation".*?\}\}?', '', response_text, flags=re.DOTALL)
+                        
+                        # Remove internal python-style comments that local models use to talk to themselves
+                        # But be careful not to remove comments inside markdown code blocks.
+                        # Since local models often put `# thoughts` outside code blocks, we can try to clean it up:
+                        lines = response_text.split('\n')
+                        cleaned_lines = []
+                        in_code_block = False
+                        for line in lines:
+                            if line.strip().startswith('```'):
+                                in_code_block = not in_code_block
+                            if not in_code_block and line.strip().startswith('# ') and not line.strip().startswith('# #'):
+                                # It's a markdown header or a leaked thought. 
+                                # Local models often say "# Get user's history..."
+                                # Let's keep it unless it looks like an action description
+                                lower_line = line.lower()
+                                if any(verb in lower_line for verb in ["get user's", "now the user", "now i will", "for example if they"]):
+                                    continue
+                            cleaned_lines.append(line)
+                        response_text = '\n'.join(cleaned_lines).strip()
+                        
+                        if "Here is a response based on the conversation so far:" in response_text:
+                            response_text = response_text.split("Here is a response based on the conversation so far:")[1].strip()
+
+                        # Fix MathJax formatting for Streamlit
+                        response_text = response_text.replace(r'\(', '$').replace(r'\)', '$')
+                        response_text = response_text.replace(r'\[', '$$').replace(r'\]', '$$')
+
                         agent_mapping = {
                             "root_agent": "AI Tutor",
                             "dsa_tutor": "DSA Tutor",
@@ -416,7 +710,7 @@ def chat_page():
                         final_display_name = agent_mapping.get(last_author, last_author.replace("_", " ").title())
                         
                         st.write(f"**{final_display_name}**")
-                        st.markdown(response_text)
+                        render_message_with_mermaid(response_text)
                         
                         st.session_state.messages.append({
                             "role": "assistant", 
@@ -424,10 +718,30 @@ def chat_page():
                             "sender_name": last_author
                         })
                         
+                        # Native background DB logging
+                        try:
+                            import json
+                            metadata = json.dumps({"sender": last_author})
+                            db_manager.log_interaction(
+                                st.session_state.user_id,
+                                st.session_state.session_id,
+                                prompt,
+                                response_text,
+                                metadata
+                            )
+                        except Exception as e:
+                            st.caption(f"Error logging to DB: {e}")
+                        
                         # Rerun to update Sidebar if path was created
                         st.rerun()
                     else:
-                        st.warning("No response received from agent.")
+                        st.info("I've processed your request behind the scenes, but I don't have anything else to add right now. What would you like to learn next?")
+                        st.session_state.messages.append({
+                            "role": "assistant", 
+                            "content": "I've processed your request behind the scenes, but I don't have anything else to add right now. What would you like to learn next?",
+                            "sender_name": "AI Tutor"
+                        })
+                        st.rerun()
                     
                 except Exception as e:
                     st.error(f"An error occurred: {e}")

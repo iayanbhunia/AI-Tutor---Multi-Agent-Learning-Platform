@@ -55,7 +55,7 @@ def create_user(user_id: str, name: str, tool_context: ToolContext) -> dict:
         "message": f"Failed to create account: {result.get('error', 'Unknown error')}"
     }
 
-def log_conversation(agent_name: str, query: str, response: str, tool_context: ToolContext) -> dict:
+def log_conversation(agent_name: str, query: str, response: str, tool_context: ToolContext, metadata_json: str = '{}') -> dict:
     """Log the conversation to database for persistence."""
     user_id = tool_context.state.get("current_user_id", "anonymous")
     session_id = getattr(tool_context, 'session_id', None)
@@ -67,7 +67,8 @@ def log_conversation(agent_name: str, query: str, response: str, tool_context: T
         user_id=user_id,
         agent_name=agent_name,
         query=query,
-        response=response
+        response=response,
+        metadata_json=metadata_json
     )
     
     return {

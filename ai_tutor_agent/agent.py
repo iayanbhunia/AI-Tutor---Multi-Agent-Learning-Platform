@@ -1,73 +1,67 @@
 """Root tutor agent - orchestrates all specialized learning agents."""
 import os
 from google.adk.agents import Agent
-from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools import FunctionTool
-from .subagents import (
-    account_agent,
-    dsa_agent,
-    developer_agent,
-    system_design_agent,
-    general_agent
-)
-from shared_tools.db_tools import log_conversation, get_user_history
-from shared_tools.path_tools import create_learning_path_tool, get_learning_paths_tool
-from .utils.llm_config import retry_config
+
+from .subagents.theory_agent.agent import theory_agent
+from .subagents.coding_agent.agent import coding_agent
+from .subagents.math_agent.agent import math_agent
+from .subagents.assessment_agent.agent import assessment_agent
+from .subagents.visualization_agent.agent import visualization_agent
+from .subagents.search_agent.agent import search_agent
+
+from .shared_tools.db_tools import get_user_history, update_learning_path_details
+from .shared_tools.path_tools import create_learning_path_tool, get_learning_paths_tool, get_current_learning_path_context
+from .utils.llm_config import get_retry_config, get_model
 
 root_agent = Agent(
     name="ai_tutor",
-    model=os.getenv("AGENT_MODEL", "gemini-2.0-flash"),
-    generate_content_config=retry_config,
-    description="AI Tutor orchestrator",
-    instruction="""You coordinate specialized AI agents for learning.
+    model=get_model(),
+    generate_content_config=get_retry_config(),
+    description="AI Tutor orchestrator that routes learning requests to specialists",
+    instruction="""You are an AI Tutor. Your ONLY jobs are:
+1. Answer simple questions directly in 1-2 sentences.
+2. Route complex requests to the right specialist agent.
+3. Ask for missing info when needed.
 
-**Context & History:**
-- Always check `get_user_history` to understand previous context.
+CONTEXT TOOLS (use ONCE, alone, when relevant):
+- get_user_history → call this only if you need to recall what the user was last studying. Do NOT call it every turn.
+- get_current_learning_path_context → call this only if you need the current syllabus/subject. Do NOT chain with other tools.
+- update_learning_path_details → call this only AFTER theory_agent or coding_agent has responded and returned to you with a completed syllabus to save.
 
-**Authentication Check:**
-- IF you receive a message starting with `[System]`: 
-    - This confirms the user is already logged in. 
-    - IF the message asks you to "Greet them enthusiastically and PROVIDE A DETAILED EXPLANATION", follow those instructions immediately. Output the greeting.
-    - ELSE, acknowledge briefly (e.g., "Welcome back, [Name]!") and ASK how you can help.
-    - DO NOT use `account_agent`.
-- CHECK if `authenticated` is True in session state.
-- IF `authenticated` is True: DO NOT ask to login.
-- IF `authenticated` is False/Missing AND no `[System]` message: Use `account_agent` to handle login.
+ROUTING — transfer to the right agent:
+- Concepts, theory, history, explanations → theory_agent
+- Code, algorithms, debugging, DSA implementation → coding_agent
+- Math, calculations, proofs → math_agent
+- Quizzes, practice tests → assessment_agent
+- Diagrams, flowcharts, visuals → visualization_agent
+- Current news, web info → search_agent
 
-**Routing:**
-- DSA problems (algorithms, code, sorting, etc.) → dsa_agent
-- Development (React, APIs, mobile, web) → developer_agent  
-- System design (architecture, cloud, databases) → system_design_agent
-- General questions / Current events / Other topics → general_agent
+PERSONALIZED LEARNING FLOW:
+- The syllabus for the current subject is already created and visible to the user.
+- Read the user's message.
+- Transfer to theory_agent, coding_agent, or math_agent to teach the current topic.
 
-**Capabilities:**
-- If asked "what can you do?", explain your specialized agents (DSA, Dev, System Design) and your ability to search the web for other topics.
-
-**Important - Delegation Rules:**
-- When calling a sub-agent, pass the USER'S ORIGINAL REQUEST or intent as clearly as possible.
-- **Learning Paths:**
-    - ALWAYS check `get_learning_paths_tool` first when a user asks to learn a subject.
-    - IF a path exists for that subject: Suggest switching to it (but allow creating a new one if they insist: "create_learning_path_tool").
-    - IF NO path exists: Call `create_learning_path_tool` to initialize the tracking.
-- **Ambiguity Rule:** If the user says "explain it again", "continue", or "tell me more" immediately after a Status/Progress update, assume they mean the **Current Topic/Subject**, NOT the status message itself. (e.g., If last msg was "You are on Arrays", and user says "explain it", pass "Explain Arrays").
-- DO NOT summarize the session state (e.g., "We covered X, now do Y") unless necessary. Just tell the agent what the user wants to do NOW.
-- If the user's request is vague (e.g., "start module 1"), YOU MUST check `get_user_history` first to understand the context.
-- **CRITICAL:** When a sub-agent returns a response, you **MUST** repeat/show that response to the user.
-- **Do NOT** just call `log_conversation` and stop. You must SPEAK to the user first.
-- **Sequence:**
-    1.  Call Sub-agent.
-    2.  **Output Sub-agent's response** to the user (verbatim or summarized).
-    3.  Call `log_conversation` to save the interaction.
-- **SAFETY:** If the response from a sub-agent is very long, pass a truncated summary to `log_conversation` to avoid JSON syntax errors.""",
+ABSOLUTE RULES — read carefully, never break:
+- ONE action per turn: call ONE tool OR transfer to ONE agent OR write a text response. NEVER do two of these in the same turn.
+- After a tool returns a result, your only options are: call the next tool in the sequence, OR respond with text, OR transfer to an agent.
+- IF you used `transfer_to_agent` and got a response back from the specialist, YOU MUST output their response directly to the user as text. DO NOT transfer again. DO NOT call more tools.
+- Never loop. Never re-check. Act and move forward.
+- For greetings, "hello", general chat → respond with text only. No tools. No transfers.
+""",
+    sub_agents=[
+        theory_agent,
+        coding_agent,
+        math_agent,
+        assessment_agent,
+        visualization_agent,
+        search_agent
+    ],
     tools=[
-        AgentTool(agent=account_agent),
-        AgentTool(agent=dsa_agent),
-        AgentTool(agent=developer_agent),
-        AgentTool(agent=system_design_agent),
-        AgentTool(agent=general_agent),
-        FunctionTool(log_conversation),
         FunctionTool(get_user_history),
         FunctionTool(create_learning_path_tool),
-        FunctionTool(get_learning_paths_tool)
+        FunctionTool(get_learning_paths_tool),
+        FunctionTool(get_current_learning_path_context),
+        FunctionTool(update_learning_path_details),
     ]
 )
