@@ -42,6 +42,7 @@ class LearningPath(Base):
     subject = Column(String(50), nullable=False)
     title = Column(String(200), nullable=False)
     syllabus = Column(Text, default='{}')  # JSON string for path-specific syllabus
+    quiz_pending_module = Column(String(500), nullable=True, default=None)  # Module name if quiz is pending
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class DBManager:
@@ -80,6 +81,13 @@ class DBManager:
                     conn.execute(text("ALTER TABLE learning_paths ADD COLUMN syllabus TEXT DEFAULT '{}'"))
             except Exception:
                 # Column likely exists
+                pass
+            
+            # Auto-Migration for 'quiz_pending_module' column
+            try:
+                with cls._instance.engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE learning_paths ADD COLUMN quiz_pending_module TEXT DEFAULT NULL"))
+            except Exception:
                 pass
             
             cls._instance._check_and_migrate(db_uri)
@@ -323,6 +331,54 @@ class DBManager:
                 "syllabus": p.syllabus,
                 "created_at": p.created_at.isoformat()
             } for p in paths]
+        finally:
+            session.close()
+
+    def set_quiz_pending(self, session_id: str, module_name: str) -> bool:
+        """Mark a quiz as pending for a learning path session."""
+        session = self.get_session()
+        try:
+            path = session.query(LearningPath).filter_by(session_id=session_id).first()
+            if path:
+                path.quiz_pending_module = module_name
+                session.commit()
+                return True
+            return False
+        except Exception as e:
+            session.rollback()
+            print(f"Error setting quiz pending: {e}")
+            return False
+        finally:
+            session.close()
+
+    def clear_quiz_pending(self, session_id: str) -> bool:
+        """Clear the quiz pending flag for a learning path session."""
+        session = self.get_session()
+        try:
+            path = session.query(LearningPath).filter_by(session_id=session_id).first()
+            if path:
+                path.quiz_pending_module = None
+                session.commit()
+                return True
+            return False
+        except Exception as e:
+            session.rollback()
+            print(f"Error clearing quiz pending: {e}")
+            return False
+        finally:
+            session.close()
+
+    def get_quiz_pending(self, session_id: str) -> str | None:
+        """Get the pending quiz module name for a session, or None if no quiz is pending."""
+        session = self.get_session()
+        try:
+            path = session.query(LearningPath).filter_by(session_id=session_id).first()
+            if path:
+                return getattr(path, 'quiz_pending_module', None)
+            return None
+        except Exception as e:
+            print(f"Error getting quiz pending: {e}")
+            return None
         finally:
             session.close()
 

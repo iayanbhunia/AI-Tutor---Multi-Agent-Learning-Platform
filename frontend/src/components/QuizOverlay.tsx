@@ -18,6 +18,7 @@ interface QuizState {
     feedback: string;
     needs_remedial: boolean;
     remedial_topic?: string;
+    wrong_topics?: string[];
     syllabus_updated?: boolean;
   };
   evaluationFeedback?: string;
@@ -113,7 +114,11 @@ export default function QuizOverlay() {
           );
         }
         window.dispatchEvent(new CustomEvent('quiz_completed', { 
-          detail: { module: quizModule } 
+          detail: { 
+            module: quizModule,
+            wrongTopics: result.final_review?.wrong_topics || [],
+            score: result.final_review?.score || 'N/A'
+          } 
         }));
         window.dispatchEvent(new CustomEvent('path_updated'));
       }
@@ -131,10 +136,9 @@ export default function QuizOverlay() {
   };
 
   const handleClose = () => {
-    if (state.status !== 'complete' && activeQuizMsgId) {
-      updateQuizTriggerMessage(activeQuizMsgId, 'abandoned');
-    }
+    // Quiz can only be closed after completion
     setQuizState(false, null);
+    useAppStore.getState().setQuizRequired(false);
   };
 
   return (
@@ -148,12 +152,14 @@ export default function QuizOverlay() {
             </h3>
             <p className="text-sm text-zinc-400 mt-1">{quizModule || 'Dynamic Generation'}</p>
           </div>
-          <button 
-            onClick={handleClose}
-            className="p-2 hover:bg-zinc-800 rounded-xl text-zinc-400 hover:text-zinc-100 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {state.status === 'complete' && (
+            <button 
+              onClick={handleClose}
+              className="p-2 hover:bg-zinc-800 rounded-xl text-zinc-400 hover:text-zinc-100 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Body */}
@@ -221,7 +227,23 @@ export default function QuizOverlay() {
                   {state.finalReview.feedback}
                 </p>
               </div>
-              {state.finalReview.needs_remedial && (
+              {state.finalReview.wrong_topics && state.finalReview.wrong_topics.length > 0 && (
+                <div className="bg-amber-500/10 border-2 border-amber-500/20 rounded-2xl p-6 text-left max-w-xl mx-auto">
+                  <p className="text-sm font-bold text-amber-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" /> Remedial Topics Added
+                  </p>
+                  <p className="text-sm text-amber-400/80 mb-3">The following topics have been added to your syllabus for review:</p>
+                  <ul className="space-y-2">
+                    {state.finalReview.wrong_topics.map((topic: string, idx: number) => (
+                      <li key={idx} className="flex items-center gap-2 text-base text-amber-400/90">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+                        <span>{topic}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {state.finalReview.needs_remedial && (!state.finalReview.wrong_topics || state.finalReview.wrong_topics.length === 0) && (
                 <div className="bg-amber-500/10 border-2 border-amber-500/20 rounded-2xl p-6 text-left max-w-xl mx-auto">
                   <p className="text-sm font-bold text-amber-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4" /> Adaptive Syllabus Update
@@ -241,14 +263,11 @@ export default function QuizOverlay() {
             <button
               onClick={() => {
                 handleClose();
-                // Trigger a refresh of the path to update syllabus on the left sidebar
-                if (state.finalReview?.needs_remedial) {
-                  window.dispatchEvent(new CustomEvent('path_updated'));
-                }
+                window.dispatchEvent(new CustomEvent('path_updated'));
               }}
               className="px-8 py-3.5 bg-zinc-100 hover:bg-white text-zinc-900 text-base font-semibold rounded-xl transition-colors shadow-lg"
             >
-              Done & Return to Chat
+              Done & Continue Learning
             </button>
           ) : (
             <button

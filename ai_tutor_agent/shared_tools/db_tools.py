@@ -150,7 +150,43 @@ def update_learning_path_details(syllabus: str, level: str = None, tool_context:
     if not session_id:
          return {"success": False, "message": "No active session found"}
 
-    # 1. Update Syllabus
+    # 1. Enforce Quiz Completion Metadata Check
+    try:
+        import json
+        new_syllabus_dict = json.loads(syllabus)
+        new_topic = new_syllabus_dict.get("current_topic")
+        
+        # Get existing DB syllabus to check previous topic
+        user_id = tool_context.state.get("current_user_id")
+        if user_id:
+            paths = db_manager.get_learning_paths(user_id)
+            current_path = next((p for p in paths if p['session_id'] == session_id), None)
+            
+            if current_path and current_path.get('syllabus'):
+                old_syllabus_dict = json.loads(current_path['syllabus'])
+                old_topic = old_syllabus_dict.get("current_topic")
+                
+                # If moving to a new topic, check if old topic was quizzed
+                if old_topic and new_topic and old_topic != new_topic:
+                    # Check if old_topic is in completed_topics mapping
+                    modules = old_syllabus_dict.get("modules", old_syllabus_dict.get("syllabus", []))
+                    if isinstance(modules, list):
+                        quiz_done = False
+                        for m in modules:
+                            completed = m.get("completed_topics", [])
+                            if old_topic in completed:
+                                quiz_done = True
+                                break
+                                
+                        if not quiz_done:
+                            return {
+                                "success": False, 
+                                "message": f"ERROR: Mandatory Quiz Checkpoint! You MUST trigger the quiz for '{old_topic}' using the trigger_topic_quiz tool before you can move to '{new_topic}'. Update rejected."
+                            }
+    except Exception as e:
+        print(f"Error enforcing quiz metadata: {e}")
+
+    # 2. Update Syllabus
     success_syllabus = db_manager.update_learning_path_details(session_id, syllabus)
     
     msg = "Syllabus saved." if success_syllabus else "Failed to save syllabus."

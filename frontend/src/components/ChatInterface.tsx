@@ -30,8 +30,9 @@ const MermaidRenderer = ({ chartStr, setSelectedImage }: { chartStr: string, set
   }
 
   try {
-    // Encode to base64 safely handling unicode
-    const b64 = btoa(unescape(encodeURIComponent(chartStr)));
+    // mermaid.ink works best with a JSON state object encoded in base64
+    const state = { code: chartStr, mermaid: { theme: 'dark' } };
+    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
     const src = `https://mermaid.ink/img/${b64}`;
     return (
       <div className="bg-white p-2 rounded-lg border border-zinc-800 my-4 overflow-x-auto flex justify-center">
@@ -50,7 +51,7 @@ const MermaidRenderer = ({ chartStr, setSelectedImage }: { chartStr: string, set
 };
 
 export default function ChatInterface() {
-  const { user, activePath, chatHistory, setChatHistory, addChatMessage, updateLastMessage } = useAppStore();
+  const { user, activePath, chatHistory, setChatHistory, addChatMessage, updateLastMessage, quizRequired, setQuizRequired } = useAppStore();
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
@@ -128,32 +129,72 @@ export default function ChatInterface() {
           const msgId = Date.now().toString() + '_quiz';
           const moduleName = data.module;
           
+          // Lock chat input immediately
+          useAppStore.getState().setQuizRequired(true);
+          
           useAppStore.getState().addChatMessage({
             id: msgId,
             agent: 'system',
-            response: 'Creating quiz...',
+            response: 'Mandatory quiz activated — complete it to continue.',
             timestamp: new Date().toISOString(),
             isQuizTrigger: true,
             quizModule: moduleName,
             quizStatus: 'loading'
           });
 
-          // Fetch the quiz in the background
+          // Fetch the quiz and auto-open overlay
           const { user, activePath } = useAppStore.getState();
           if (user && activePath) {
             fetch('/api/quiz/start', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ user_id: user.user_id, session_id: activePath })
+              body: JSON.stringify({ user_id: user.user_id, session_id: activePath, module_name: moduleName })
             })
             .then(res => res.json())
             .then(quizData => {
               useAppStore.getState().updateQuizTriggerMessage(msgId, 'ready', quizData);
+              // Auto-open the quiz overlay immediately
+              useAppStore.getState().setQuizState(true, moduleName, msgId);
             })
             .catch(err => console.error('Failed to fetch quiz', err));
           }
+        } else if (data.type === 'quiz_required') {
+          // Server is enforcing quiz completion — lock chat
+          useAppStore.getState().setQuizRequired(true);
         }
       };
+
+      // Check if a quiz is pending for this session (handles page refresh)
+      fetch(`/api/quiz/pending?session_id=${activePath}&user_id=${user.user_id}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.pending && data.module_name) {
+            setQuizRequired(true);
+            // Auto-fetch and open the quiz
+            fetch('/api/quiz/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id: user.user_id, session_id: activePath, module_name: data.module_name })
+            })
+            .then(res => res.json())
+            .then(quizData => {
+              const msgId = Date.now().toString() + '_quiz_restore';
+              useAppStore.getState().addChatMessage({
+                id: msgId,
+                agent: 'system',
+                response: 'Mandatory quiz activated — complete it to continue.',
+                timestamp: new Date().toISOString(),
+                isQuizTrigger: true,
+                quizModule: data.module_name,
+                quizStatus: 'ready'
+              });
+              useAppStore.getState().setQuizPreloadedData(quizData);
+              useAppStore.getState().setQuizState(true, data.module_name, msgId);
+            })
+            .catch(err => console.error('Failed to restore quiz', err));
+          }
+        })
+        .catch(() => {});
 
       return () => {
         if (wsRef.current) wsRef.current.close();
@@ -165,10 +206,21 @@ export default function ChatInterface() {
     const handleQuizCompleted = (e: Event) => {
       const customEvent = e as CustomEvent;
       const moduleName = customEvent.detail.module;
+      const wrongTopics = customEvent.detail.wrongTopics || [];
+      const score = customEvent.detail.score || 'N/A';
+      
+      // Unlock chat
+      useAppStore.getState().setQuizRequired(false);
       
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        let systemMsg = `[System Action]: The user has completed the mandatory quiz for module '${moduleName}' with score ${score}. The syllabus has been updated.`;
+        if (wrongTopics.length > 0) {
+          systemMsg += ` Remedial topics were added for: ${wrongTopics.join(', ')}. Teach these remedial topics before moving to the next module.`;
+        } else {
+          systemMsg += ` The student passed with no wrong answers. Proceed to teach the next topic in the syllabus.`;
+        }
         wsRef.current.send(JSON.stringify({
-          prompt: `[System Action]: The user has successfully passed the quiz for module '${moduleName}'. The syllabus state has been updated to mark this module as completed. You MUST now proceed to teach the very next topic in the syllabus.`,
+          prompt: systemMsg,
           hidden: true
         }));
       }
@@ -327,18 +379,26 @@ export default function ChatInterface() {
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-zinc-950 via-zinc-950 to-transparent pt-10 pointer-events-none">
+        {quizRequired && (
+          <div className="max-w-3xl mx-auto mb-3 pointer-events-auto">
+            <div className="flex items-center gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-400 text-sm font-medium animate-pulse">
+              <span className="text-lg">🔒</span>
+              <span>Complete the mandatory quiz to unlock the chat and continue learning.</span>
+            </div>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto relative group pointer-events-auto">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a question..."
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3.5 pr-14 text-sm text-zinc-100 focus:outline-none focus:border-zinc-600 transition-colors shadow-sm"
-            disabled={isStreaming}
+            placeholder={quizRequired ? '🔒 Complete the quiz to continue...' : 'Ask a question...'}
+            className={`w-full bg-zinc-900 border rounded-xl px-5 py-3.5 pr-14 text-sm text-zinc-100 focus:outline-none transition-colors shadow-sm ${quizRequired ? 'border-amber-500/50 bg-amber-950/10 cursor-not-allowed' : 'border-zinc-800 focus:border-zinc-600'}`}
+            disabled={isStreaming || quizRequired}
           />
           <button
             type="submit"
-            disabled={!input.trim() || isStreaming}
+            disabled={!input.trim() || isStreaming || quizRequired}
             className="absolute right-2 top-2 bottom-2 aspect-square bg-zinc-100 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-900 rounded-lg flex items-center justify-center transition-colors"
           >
             <Send className="w-4 h-4" />

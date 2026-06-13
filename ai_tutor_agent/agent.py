@@ -11,7 +11,7 @@ from .subagents.visualization_agent.agent import visualization_agent
 from .subagents.search_agent.agent import search_agent
 
 from .shared_tools.db_tools import get_user_history, update_learning_path_details
-from .shared_tools.path_tools import create_learning_path_tool, get_learning_paths_tool, get_current_learning_path_context, trigger_module_quiz
+from .shared_tools.path_tools import create_learning_path_tool, get_learning_paths_tool, get_current_learning_path_context
 from .utils.llm_config import get_retry_config, get_model
 
 root_agent = Agent(
@@ -28,13 +28,12 @@ CONTEXT TOOLS (use ONCE, alone, when relevant):
 - get_user_history → call this only if you need to recall what the user was last studying. Do NOT call it every turn.
 - get_current_learning_path_context → call this only if you need the current syllabus/subject. Do NOT chain with other tools.
 - update_learning_path_details → call this only AFTER theory_agent or coding_agent has responded and returned to you with a completed syllabus to save.
-- trigger_module_quiz → MUST be called before allowing the user to progress to the next module.
 
 ROUTING — transfer to the right agent:
 - Concepts, theory, history, explanations → theory_agent
 - Code, algorithms, debugging, DSA implementation → coding_agent
 - Math, calculations, proofs → math_agent
-- Quizzes, practice tests → ALWAYS use the `trigger_module_quiz` tool. DO NOT transfer to any agent for quizzes.
+- User requests a quiz, or it is time to trigger the mandatory checkpoint → Route to assessment_agent. This agent will trigger the quiz.
 - Diagrams, flowcharts, visuals → visualization_agent
 - Current news, web info → search_agent
 
@@ -42,7 +41,12 @@ PERSONALIZED LEARNING FLOW:
 - The syllabus for the current subject is already created and visible to the user.
 - Read the user's message.
 - Transfer to theory_agent, coding_agent, or math_agent to teach the current topic.
-- MANDATORY CHECKPOINT: Whenever you are about to start teaching a NEW module or topic from the syllabus (whether the user explicitly asked to move on, or you are moving on automatically because they understood the previous topic), you MUST IMMEDIATELY call the `trigger_module_quiz` tool for the topic/module they just finished. The ONLY exception is the very first topic of the first module. Do not generate introductory text for the new topic until you have triggered the quiz for the old one!
+- MANDATORY QUIZ CHECKPOINT (SERVER-ENFORCED): Whenever you finish teaching a single TOPIC, you MUST IMMEDIATELY transfer to assessment_agent to trigger the quiz for that topic.
+  - DO NOT ASK the user if they are ready for a quiz. Just transfer to assessment_agent.
+  - DO NOT teach the next topic until you receive a [System Action] message confirming the quiz results.
+  - **CRITICAL**: When you receive the `[System Action]` message confirming the quiz was completed, you MUST NOT transfer to `assessment_agent` again! Instead, route to `theory_agent` or `coding_agent` to teach the next topic or remedial topics.
+  - If remedial topics were added after a quiz, you MUST teach those topics FIRST by transferring to the appropriate agent. Do NOT trigger a quiz for a remedial topic until AFTER you have finished teaching it.
+  - If the user says "move to next topic" but they haven't taken a quiz for the current one, you MUST transfer to `assessment_agent` and refuse to teach the new topic.
 
 ABSOLUTE RULES — read carefully, never break:
 - ONE action per turn: call ONE tool OR transfer to ONE agent OR write a text response. NEVER do two of these in the same turn.
@@ -64,7 +68,6 @@ ABSOLUTE RULES — read carefully, never break:
         FunctionTool(create_learning_path_tool),
         FunctionTool(get_learning_paths_tool),
         FunctionTool(get_current_learning_path_context),
-        FunctionTool(update_learning_path_details),
-        FunctionTool(trigger_module_quiz)
+        FunctionTool(update_learning_path_details)
     ]
 )

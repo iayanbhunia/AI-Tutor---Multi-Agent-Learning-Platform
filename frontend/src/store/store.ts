@@ -31,6 +31,7 @@ interface AppState {
   quizModule: string | null;
   quizPreloadedData: any | null;
   activeQuizMsgId: string | null;
+  quizRequired: boolean;
   
   setUser: (user: User | null) => void;
   setActivePath: (sessionId: string | null) => void;
@@ -41,6 +42,7 @@ interface AppState {
   setModelMode: (mode: 'local' | 'online') => void;
   setQuizState: (active: boolean, module: string | null, msgId?: string) => void;
   setQuizPreloadedData: (data: any) => void;
+  setQuizRequired: (required: boolean) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -54,6 +56,7 @@ export const useAppStore = create<AppState>()(
       quizModule: null,
       quizPreloadedData: null,
       activeQuizMsgId: null,
+      quizRequired: false,
 
       setUser: (user) => set({ user }),
       setActivePath: (activePath) => set({ activePath }),
@@ -78,7 +81,8 @@ export const useAppStore = create<AppState>()(
       }),
       setModelMode: (modelMode) => set({ modelMode }),
       setQuizState: (quizActive, quizModule, msgId) => set({ quizActive, quizModule, activeQuizMsgId: msgId || null }),
-      setQuizPreloadedData: (quizPreloadedData) => set({ quizPreloadedData })
+      setQuizPreloadedData: (quizPreloadedData) => set({ quizPreloadedData }),
+      setQuizRequired: (quizRequired) => set({ quizRequired })
     }),
     {
       name: 'ai-tutor-storage',

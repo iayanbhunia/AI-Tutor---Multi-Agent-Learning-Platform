@@ -74,6 +74,7 @@ class ModelSettingRequest(BaseModel):
 class QuizStartRequest(BaseModel):
     user_id: str
     session_id: str
+    module_name: Optional[str] = None
 
 class QuizAnswerRequest(BaseModel):
     user_id: str
@@ -158,6 +159,14 @@ async def create_path(req: CreatePathRequest):
 
 from fastapi_app.quiz_engine import generate_first_question, evaluate_and_generate_next
 
+@app.get("/api/quiz/pending")
+async def quiz_pending(session_id: str, user_id: str):
+    """Check if a quiz is pending for this session (used on page refresh/reconnect)."""
+    pending_module = db_manager.get_quiz_pending(session_id)
+    if pending_module:
+        return {"pending": True, "module_name": pending_module}
+    return {"pending": False, "module_name": None}
+
 @app.post("/api/quiz/start")
 async def quiz_start(req: QuizStartRequest):
     paths = db_manager.get_learning_paths(req.user_id)
@@ -165,7 +174,11 @@ async def quiz_start(req: QuizStartRequest):
     if not path or not path.get('syllabus'):
         raise HTTPException(status_code=400, detail="Syllabus not found")
     
-    question = generate_first_question(path['syllabus'])
+    # Set quiz as pending in DB (server-side enforcement)
+    if req.module_name:
+        db_manager.set_quiz_pending(req.session_id, req.module_name)
+    
+    question = generate_first_question(path['syllabus'], req.module_name)
     return question
 
 @app.post("/api/quiz/answer")
@@ -175,7 +188,7 @@ async def quiz_answer(req: QuizAnswerRequest):
     if not path or not path.get('syllabus'):
         raise HTTPException(status_code=400, detail="Syllabus not found")
         
-    result = evaluate_and_generate_next(path['syllabus'], req.history, req.answer)
+    result = evaluate_and_generate_next(path['syllabus'], req.history, req.answer, req.module_name)
     if result.get("status") == "complete":
         try:
             syllabus_json = json.loads(path['syllabus'])
@@ -188,30 +201,67 @@ async def quiz_answer(req: QuizAnswerRequest):
             else:
                 syllabus_list = syllabus_json if isinstance(syllabus_json, list) else []
                 
-            # 1. Update module status
+            # 1. ALWAYS mark module as completed (pass or fail, student advances)
+            # 2. Find insertion point: right after the completed module/topic's parent module
+            insert_idx = len(syllabus_list)  # default: append at end
             if req.module_name:
-                for m in syllabus_list:
-                    # Match title or module
+                for i, m in enumerate(syllabus_list):
                     m_title = m.get("title", m.get("module", ""))
+                    topics = m.get("topics", [])
+                    
+                    # Check if it matches the module title OR any topic inside it
+                    match_found = False
                     if req.module_name.lower() in m_title.lower() or m_title.lower() in req.module_name.lower():
-                        m["status"] = "completed"
-                        syllabus_updated = True
+                        match_found = True
+                    else:
+                        for t in topics:
+                            if req.module_name.lower() in t.lower() or t.lower() in req.module_name.lower():
+                                match_found = True
+                                break
+                                
+                    if match_found:
+                        # Add topic to completed_topics mapping
+                        if "completed_topics" not in m:
+                            m["completed_topics"] = []
+                        if req.module_name not in m["completed_topics"]:
+                            m["completed_topics"].append(req.module_name)
+                            syllabus_updated = True
+                            
+                        # We don't mark the whole module as completed unless they finished the whole module,
+                        # but for now, the user requested advancing to next topic, so we just set insert_idx
+                        # to insert remedials right after this module.
+                        insert_idx = i + 1
                         break
             
-            # 2. Add remedial topic if needed
-            if result.get("final_review", {}).get("needs_remedial"):
-                remedial_topic = result["final_review"]["remedial_topic"]
-                syllabus_list.append({
+            # 3. Add a remedial topic for EACH wrong answer (per-question granularity)
+            wrong_topics = result.get("final_review", {}).get("wrong_topics", [])
+            remedials_added = 0
+            for topic in wrong_topics:
+                remedial_module = {
+                    "module": f"Remedial: {topic}",
+                    "title": f"Remedial: {topic}",
+                    "status": "pending",
+                    "subtopics": [f"Review: {topic}", "Practice exercises"],
+                    "topics": [f"Review: {topic}", "Practice exercises"]
+                }
+                syllabus_list.insert(insert_idx + remedials_added, remedial_module)
+                remedials_added += 1
+                syllabus_updated = True
+            
+            # 4. Fallback: if LLM returned needs_remedial but no wrong_topics list
+            if not wrong_topics and result.get("final_review", {}).get("needs_remedial"):
+                remedial_topic = result["final_review"].get("remedial_topic", "Review")
+                syllabus_list.insert(insert_idx, {
                     "module": f"Remedial: {remedial_topic}",
                     "title": f"Remedial: {remedial_topic}",
                     "status": "pending",
-                    "subtopics": ["Review fundamentals", "Practice questions"],
-                    "topics": ["Review fundamentals", "Practice questions"]
+                    "subtopics": [f"Review: {remedial_topic}", "Practice exercises"],
+                    "topics": [f"Review: {remedial_topic}", "Practice exercises"]
                 })
                 syllabus_updated = True
             
             if syllabus_updated:
-                # Re-wrap
+                # Re-wrap in original structure
                 if isinstance(syllabus_json, dict) and "syllabus" in syllabus_json:
                     syllabus_json["syllabus"] = syllabus_list
                 elif isinstance(syllabus_json, dict) and "modules" in syllabus_json:
@@ -223,8 +273,14 @@ async def quiz_answer(req: QuizAnswerRequest):
                 db_manager.update_learning_path_details(req.session_id, new_syllabus_str)
                 if result.get("final_review"):
                     result["final_review"]["syllabus_updated"] = True
+            
+            # 5. Clear the quiz_pending flag — student can now chat again
+            db_manager.clear_quiz_pending(req.session_id)
+                    
         except Exception as e:
             print("Error updating syllabus status:", e)
+            # Still clear quiz pending even on error to avoid permanent lock
+            db_manager.clear_quiz_pending(req.session_id)
             
     return result
 
@@ -274,6 +330,18 @@ async def websocket_chat(websocket: WebSocket, session_id: str, user_id: str):
             if not prompt:
                 continue
 
+            # SERVER-SIDE QUIZ ENFORCEMENT: Block all non-hidden messages while quiz is pending
+            if not hidden:
+                pending_module = db_manager.get_quiz_pending(session_id)
+                if pending_module:
+                    await websocket.send_json({
+                        "type": "quiz_required",
+                        "module": pending_module,
+                        "content": f"You must complete the quiz for '{pending_module}' before continuing."
+                    })
+                    await websocket.send_json({"type": "done"})
+                    continue
+
             # Log user query if not hidden
             if not hidden:
                 db_manager.log_interaction(session_id, user_id, "user", prompt, "")
@@ -298,11 +366,13 @@ async def websocket_chat(websocket: WebSocket, session_id: str, user_id: str):
                                 agent_name = call.args.get("agent_name", "specialist") if hasattr(call, 'args') and isinstance(call.args, dict) else "specialist"
                                 display_name = agent_name.replace("_", " ").title()
                                 await websocket.send_json({"type": "status", "content": f"Consulting {display_name}..."})
-                            elif call.name == "trigger_module_quiz":
-                                module_name = "Unknown Module"
+                            elif call.name == "trigger_topic_quiz":
+                                module_name = "Unknown Topic"
                                 if hasattr(call, 'args') and isinstance(call.args, dict):
-                                    module_name = call.args.get("module_name", "Unknown Module")
-                                await websocket.send_json({"type": "status", "content": f"Preparing Quiz for {module_name}..."})
+                                    module_name = call.args.get("topic_name", call.args.get("module_name", "Unknown Topic"))
+                                # Set quiz pending in DB — this blocks future chat messages
+                                db_manager.set_quiz_pending(session_id, module_name)
+                                await websocket.send_json({"type": "status", "content": f"Preparing Mandatory Quiz for {module_name}..."})
                                 await websocket.send_json({"type": "trigger_quiz", "module": module_name})
                             else:
                                 await websocket.send_json({"type": "status", "content": f"Running {call.name}..."})

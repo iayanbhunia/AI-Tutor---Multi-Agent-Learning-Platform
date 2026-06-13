@@ -126,16 +126,17 @@ def get_current_learning_path_context(tool_context: ToolContext) -> dict:
     
     return {"found": False, "message": "No specific learning path created for this chat session yet."}
 
-def trigger_module_quiz(module_name: str, tool_context: ToolContext = None) -> dict:
+def trigger_topic_quiz(topic_name: str, tool_context: ToolContext = None) -> dict:
     """
-    Triggers the interactive Quiz Engine overlay for the current module.
-    MUST be called before advancing a student to a new module to verify mastery.
+    Triggers the interactive Quiz Engine overlay for the current topic.
+    MUST be called before advancing a student to a new topic to verify mastery.
+    The quiz is enforced server-side — the student's chat will be locked until they complete it.
     
     Args:
-        module_name: The name of the module the user just finished learning.
+        topic_name: The name of the topic the user just finished learning.
     """
     return {
         "status": "quiz_triggered",
-        "message": f"Instruct the user that a quiz for '{module_name}' has been activated. Do NOT teach the next topic until they pass the quiz.",
+        "message": f"A mandatory quiz for '{topic_name}' has been activated. The student's chat is now locked until they complete the quiz. Do NOT teach any new content until the quiz is completed and you receive a system message confirming the results.",
         "_internal_action": "open_quiz"
     }
