@@ -6,6 +6,8 @@ ai_tutor_agent/.env
 
 # Database Files
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 ai_tutor.db

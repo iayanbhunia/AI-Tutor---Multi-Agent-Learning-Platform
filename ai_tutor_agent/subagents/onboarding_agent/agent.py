@@ -45,5 +45,4 @@ Format:
 
 Remember: ONLY OUTPUT JSON. Nothing else.
 """,
-    output_key="onboarding_response"
 )

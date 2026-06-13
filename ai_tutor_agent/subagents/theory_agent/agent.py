@@ -18,5 +18,4 @@ Your job is to provide clear, accurate, and comprehensive explanations for theor
 
 CRITICAL: You are a terminal agent. You MUST NOT use any tools. You MUST NOT use transfer_to_agent. You MUST respond with TEXT ONLY.
 """,
-    output_key="theory_response"
 )

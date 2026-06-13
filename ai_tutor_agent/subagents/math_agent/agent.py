@@ -18,5 +18,4 @@ Your job is to solve numerical problems, provide proofs, and explain mathematica
 
 CRITICAL: You are a terminal agent. You MUST NOT use any tools. You MUST NOT use transfer_to_agent. You MUST respond with TEXT ONLY.
 """,
-    output_key="math_response"
 )

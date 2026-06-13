@@ -30,5 +30,4 @@ Your role:
 CRITICAL: You are a terminal agent. You MUST NOT use any tools. You MUST NOT use transfer_to_agent. You MUST respond with TEXT ONLY.
 """,
     tools=tools_list,
-    output_key="search_response"
 )

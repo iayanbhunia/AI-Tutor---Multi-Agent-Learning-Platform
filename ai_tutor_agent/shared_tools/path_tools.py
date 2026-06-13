@@ -110,7 +110,7 @@ def get_current_learning_path_context(tool_context: ToolContext) -> dict:
         session_id = tool_context.state.get("session_id")
         
     if not session_id:
-        return {"error": "No active session ID found."}
+        return {"context": "No syllabus context found for the current path."}
         
     paths = db_manager.get_learning_paths(tool_context.state.get("current_user_id"))
     current_path = next((p for p in paths if p['session_id'] == session_id), None)
@@ -125,3 +125,17 @@ def get_current_learning_path_context(tool_context: ToolContext) -> dict:
         }
     
     return {"found": False, "message": "No specific learning path created for this chat session yet."}
+
+def trigger_module_quiz(module_name: str, tool_context: ToolContext = None) -> dict:
+    """
+    Triggers the interactive Quiz Engine overlay for the current module.
+    MUST be called before advancing a student to a new module to verify mastery.
+    
+    Args:
+        module_name: The name of the module the user just finished learning.
+    """
+    return {
+        "status": "quiz_triggered",
+        "message": f"Instruct the user that a quiz for '{module_name}' has been activated. Do NOT teach the next topic until they pass the quiz.",
+        "_internal_action": "open_quiz"
+    }

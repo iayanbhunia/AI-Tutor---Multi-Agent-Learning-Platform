@@ -195,7 +195,7 @@ class DBManager:
         finally:
             session.close()
 
-    def get_chat_history(self, user_id: str, session_id: str = None, limit: int = 10) -> list:
+    def get_chat_history(self, user_id: str, session_id: str = None, limit: int = 50) -> list:
         """Get recent chat history for a user, optionally filtered by session."""
         session = self.get_session()
         try:

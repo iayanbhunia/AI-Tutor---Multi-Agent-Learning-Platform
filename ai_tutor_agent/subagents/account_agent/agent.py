@@ -52,5 +52,4 @@ Be friendly and clear.""",
         FunctionTool(check_user),
         FunctionTool(create_user)
     ],
-    output_key="account_status"
 )
