@@ -65,33 +65,42 @@ Here is the quiz history so far (each item has the question and the correct answ
 {history_str}
 
 The user's latest answer to the last question was: "{answer}"
+"""
 
-Instructions:
-1. Evaluate their answer. Provide short, constructive feedback.
-2. If the total number of questions asked (including this one) is less than 5, generate the next question. Make it slightly harder if they were right, or easier/same level if wrong. Keep questions within the same topic.
-3. If the total number of questions asked is 5 or more, provide a final review instead of a question. 
-   - List EVERY question that was answered incorrectly with the specific sub-topic it tested.
-   - For each wrong answer, specify the exact sub-topic so it can be added as a remedial topic.
+    if len(history) >= 4: # 4 previous + 1 current = 5
+        prompt += """
+CRITICAL INSTRUCTION: This is the FINAL question. 
+You MUST set "status": "complete".
+DO NOT include "next_question".
+You MUST include "final_review" object summarizing their performance across all questions.
+"""
+    else:
+        prompt += """
+Instruction: Generate the next question.
+You MUST set "status": "ongoing".
+You MUST include "next_question" object.
+"""
 
+    prompt += """
 Respond strictly in JSON format:
-{{
+{
     "evaluation": "Correct! Good job because...",
     "is_correct": true,
     "status": "ongoing", // strictly "ongoing" or "complete"
-    "next_question": {{ // Include ONLY if status is "ongoing"
+    "next_question": { // Include ONLY if status is "ongoing"
         "question": "...",
         "type": "mcq",
         "options": ["A", "B", "C", "D"],
         "topic": "..."
-    }},
-    "final_review": {{ // Include ONLY if status is "complete"
+    },
+    "final_review": { // Include ONLY if status is "complete"
         "score": "4/5",
         "feedback": "Great overall, but you need to review X...",
         "wrong_topics": ["specific topic 1 they got wrong", "specific topic 2 they got wrong"],
         "needs_remedial": true,
         "remedial_topic": "Main weak area summary"
-    }}
-}}
+    }
+}
 """
     model = _get_litellm_model()
     response = litellm.completion(

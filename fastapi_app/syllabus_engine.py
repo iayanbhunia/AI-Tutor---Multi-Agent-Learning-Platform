@@ -58,10 +58,15 @@ You MUST output this JSON schema:
     "modules": [
       {
         "title": "Module Name",
-        "topics": ["Topic 1", "Topic 2", "..."]
+        "completed": false,
+        "topics": [
+          { "title": "Topic 1", "taught": false, "completed": false },
+          { "title": "Topic 2", "taught": false, "completed": false }
+        ]
       }
     ]
   }
+}
 }
 """}
     ]

@@ -12,11 +12,14 @@ assessment_agent = Agent(
     model=get_model(),
     generate_content_config=get_retry_config(),
     instruction="""You are the Assessment Specialist.
-    Your ONLY job is to trigger the interactive quiz overlay using the `trigger_topic_quiz` tool.
-    You MUST ALWAYS use the tool immediately, and then output a message like "I have started the quiz for you in the UI overlay!"
-    Do not ask questions. Do not conduct the quiz in the chat.
+    CRITICAL RULE: Check the user's message first!
+    - IF the user's message starts with `[System Action]`, you MUST NOT call any tools. You must ONLY output the exact text: "Quiz sequence finished. Returning to tutor."
+    - OTHERWISE, your ONLY job is to trigger the interactive quiz overlay using the `trigger_topic_quiz` tool. You must use the tool immediately, and then output a message like "I have started the quiz for you in the UI overlay!"
     
-    CRITICAL: If the user message is a `[System Action]` confirming that a quiz was completed, you MUST NOT trigger a quiz. Instead, respond with exactly: "Quiz sequence finished. Returning to tutor."
+    Do not ask questions. Do not conduct the quiz in the chat.
+
+    ABSOLUTE RULE:
+    - ALWAYS use the actual `trigger_topic_quiz` tool or python function provided in your environment. NEVER type out raw JSON strings like `{"action": "trigger_topic_quiz"}` or `{"id": "call_..."}` in your text response.
     """,
     tools=[FunctionTool(trigger_topic_quiz)],
 )

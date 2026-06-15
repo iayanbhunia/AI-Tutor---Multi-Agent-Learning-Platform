@@ -150,10 +150,10 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
                       {mod.title}
                     </h4>
                     <ul className="space-y-2">
-                      {mod.topics?.map((topic: string, j: number) => (
+                      {mod.topics?.map((topic: any, j: number) => (
                         <li key={j} className="text-xs text-zinc-400 flex items-start gap-2 leading-relaxed">
                           <span className="text-zinc-600 mt-0.5 shrink-0">•</span>
-                          {topic}
+                          {typeof topic === 'string' ? topic : topic.title || 'Unknown Topic'}
                         </li>
                       ))}
                     </ul>

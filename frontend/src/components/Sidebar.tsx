@@ -132,14 +132,35 @@ export default function Sidebar({ onNewChat }: SidebarProps) {
               } else if (activePathDetails.syllabus?.modules) {
                 syllabusList = activePathDetails.syllabus.modules.map((m: any) => ({
                   module: m.title,
+                  completed: m.completed,
+                  completed_topics: m.completed_topics || [],
                   subtopics: m.topics,
                   status: m.status || 'pending'
                 }));
               }
               
-              let totalModules = syllabusList ? syllabusList.length : 0;
-              let completedModules = syllabusList ? syllabusList.filter((m: any) => m.status === 'completed' || m.status === 'done').length : 0;
-              let progressPercent = totalModules === 0 ? 0 : Math.round((completedModules / totalModules) * 100);
+              let totalTopics = 0;
+              let completedTopics = 0;
+              
+              if (syllabusList) {
+                syllabusList.forEach((m: any) => {
+                  if (m.subtopics && m.subtopics.length > 0) {
+                    m.subtopics.forEach((t: any) => {
+                      totalTopics++;
+                      if (typeof t === 'string' && m.completed_topics?.includes(t)) {
+                        completedTopics++;
+                      } else if (t.completed) {
+                        completedTopics++;
+                      }
+                    });
+                  } else {
+                     totalTopics++;
+                     if (m.status === 'completed' || m.status === 'done' || m.completed) completedTopics++;
+                  }
+                });
+              }
+              
+              let progressPercent = totalTopics === 0 ? 0 : Math.round((completedTopics / totalTopics) * 100);
 
               return (
                 <>
@@ -165,7 +186,7 @@ export default function Sidebar({ onNewChat }: SidebarProps) {
                     <div className="pl-3">
                       {syllabusList && syllabusList.length > 0 ? (
                         syllabusList.map((item: any, idx: number) => {
-                          const isCompleted = item.status === 'completed' || item.status === 'done';
+                          const isCompleted = item.completed || item.status === 'completed' || item.status === 'done';
                           const isOngoing = item.status === 'ongoing' || item.status === 'in-progress' || item.status === 'started';
                           const isLast = idx === syllabusList.length - 1;
                           
@@ -185,9 +206,17 @@ export default function Sidebar({ onNewChat }: SidebarProps) {
                               
                               {item.subtopics && item.subtopics.length > 0 && (
                                 <ul className={`text-xs mt-1.5 list-disc ml-4 space-y-1 ${isOngoing ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                                  {item.subtopics.map((topic: string, tIdx: number) => (
-                                    <li key={tIdx} className={!isOngoing && !isCompleted ? 'opacity-50' : ''}>{topic}</li>
-                                  ))}
+                                  {item.subtopics.map((topic: any, tIdx: number) => {
+                                    const topicTitle = typeof topic === 'string' ? topic : topic.title || 'Topic';
+                                    const topicCompleted = typeof topic === 'string' ? item.completed_topics?.includes(topic) : topic.completed;
+                                    const topicTaught = typeof topic === 'object' && topic.taught;
+                                    
+                                    return (
+                                      <li key={tIdx} className={topicCompleted ? 'text-emerald-400 font-medium' : topicTaught ? 'text-amber-400 font-medium' : (!isOngoing && !isCompleted ? 'opacity-50' : '')}>
+                                        {topicTitle} {topicCompleted ? ' ✓' : topicTaught ? ' (Quiz Pending)' : ''}
+                                      </li>
+                                    );
+                                  })}
                                 </ul>
                               )}
                             </div>

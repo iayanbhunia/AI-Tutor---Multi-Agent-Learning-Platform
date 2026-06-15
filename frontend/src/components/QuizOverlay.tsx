@@ -31,6 +31,13 @@ export default function QuizOverlay() {
   const [answer, setAnswer] = useState('');
 
   useEffect(() => {
+    if (!quizActive) {
+      // Reset state when overlay is closed so the next quiz starts fresh
+      setState({ status: 'loading', history: [] });
+      setAnswer('');
+      return;
+    }
+
     if (quizActive && state.status === 'loading') {
       if (quizPreloadedData) {
         setState({
@@ -43,7 +50,7 @@ export default function QuizOverlay() {
         fetch('/api/quiz/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: user.user_id, session_id: activePath })
+          body: JSON.stringify({ user_id: user.user_id, session_id: activePath, module_name: quizModule })
         })
         .then(res => res.json())
         .then(data => {
@@ -59,7 +66,7 @@ export default function QuizOverlay() {
         });
       }
     }
-  }, [quizActive, quizPreloadedData, activePath, user, state.status, setQuizState]);
+  }, [quizActive, quizPreloadedData, activePath, user, state.status, setQuizState, quizModule]);
 
   if (!quizActive) return null;
 

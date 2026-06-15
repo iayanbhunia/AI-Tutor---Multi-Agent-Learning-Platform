@@ -4,7 +4,10 @@ from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, E
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session as SQLSession
 from datetime import datetime
+from dotenv import load_dotenv
 import os
+
+load_dotenv()  # Load root .env so DATABASE_URI is available regardless of import order
 
 Base = declarative_base()
 

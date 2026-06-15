@@ -1,8 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAppStore } from '../store/store';
-import { Send, Bot, User as UserIcon, Loader2, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { Send, Bot, User as UserIcon, Loader2, AlertTriangle, CheckCircle2, XCircle, Play } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
+import mermaid from 'mermaid';
+
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'default',
+  securityLevel: 'loose',
+});
 
 class ErrorBoundary extends React.Component<{children: React.ReactNode, fallback?: React.ReactNode}, {hasError: boolean, error: any}> {
   constructor(props: any) { super(props); this.state = { hasError: false, error: null }; }
@@ -14,7 +22,39 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode, fallback
 }
 
 const MermaidRenderer = ({ chartStr, setSelectedImage }: { chartStr: string, setSelectedImage: (src: string) => void }) => {
+  const [svg, setSvg] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const renderDiagram = async () => {
+      try {
+        setHasError(false);
+        const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Sanitize chart string to prevent common Mermaid v11 syntax errors
+        // 1. Array.isArray check (handled upstream now, but just in case)
+        // 2. Replace backticks with single quotes
+        // 3. Replace isolated & with 'and'
+        let safeChartStr = chartStr.replace(/`/g, "'").replace(/&(?!\w+;)/g, "and");
+        
+        const { svg } = await mermaid.render(id, safeChartStr);
+        
+        // Mermaid 10+ sometimes catches parse errors and returns an SVG containing the error text 
+        // instead of throwing a JavaScript error. We must intercept this.
+        if (svg.includes('Syntax error in text')) {
+          throw new Error("Mermaid syntax error");
+        }
+        
+        if (isMounted) setSvg(svg);
+      } catch (err) {
+        console.error("Mermaid render error", err);
+        if (isMounted) setHasError(true);
+      }
+    };
+    renderDiagram();
+    return () => { isMounted = false; };
+  }, [chartStr]);
 
   if (hasError) {
     return (
@@ -29,25 +69,22 @@ const MermaidRenderer = ({ chartStr, setSelectedImage }: { chartStr: string, set
     );
   }
 
-  try {
-    // mermaid.ink works best with a JSON state object encoded in base64
-    const state = { code: chartStr, mermaid: { theme: 'dark' } };
-    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
-    const src = `https://mermaid.ink/img/${b64}`;
-    return (
-      <div className="bg-white p-2 rounded-lg border border-zinc-800 my-4 overflow-x-auto flex justify-center">
-        <img 
-          src={src} 
-          alt="Mermaid diagram" 
-          className="max-w-full cursor-pointer hover:opacity-90 transition-opacity" 
-          onClick={() => setSelectedImage(src)}
-          onError={() => setHasError(true)} 
-        />
-      </div>
-    );
-  } catch (err) {
-    return <div className="text-xs text-red-400 p-2 border border-red-500/20 rounded-lg bg-red-500/10">Failed to encode diagram</div>;
+  if (!svg) {
+    return <div className="text-zinc-500 animate-pulse text-xs p-4 border border-zinc-800 rounded-lg flex justify-center">Rendering diagram...</div>;
   }
+
+  const handleImageClick = () => {
+    const b64 = btoa(unescape(encodeURIComponent(svg)));
+    setSelectedImage(`data:image/svg+xml;base64,${b64}`);
+  };
+
+  return (
+    <div 
+      className="bg-white p-6 rounded-lg border border-zinc-800 my-4 overflow-x-auto flex justify-center [&>svg]:max-w-full [&>svg]:h-auto cursor-pointer hover:opacity-90 transition-opacity"
+      dangerouslySetInnerHTML={{ __html: svg }} 
+      onClick={handleImageClick}
+    />
+  );
 };
 
 export default function ChatInterface() {
@@ -58,23 +95,36 @@ export default function ChatInterface() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
   const markdownComponents = useMemo(() => ({
-    code({node, inline, className, children, ...props}: any) {
+    pre(props: any) {
+      return (
+        <pre className="bg-zinc-950 p-4 rounded-lg overflow-x-auto border border-zinc-800 my-4" {...props} />
+      );
+    },
+    code({node, className, children, ...props}: any) {
       const match = /language-(\w+)/.exec(className || '');
-      if (!inline && match && match[1] === 'mermaid') {
-        const chartStr = String(children).replace(/\n$/, '');
+      if (match && match[1] === 'mermaid') {
+        let chartStr = Array.isArray(children) ? children.join('') : String(children);
+        chartStr = chartStr.replace(/\n$/, '');
+        chartStr = chartStr.replace(/-->\|([^|]+)\|>/g, '-->|$1|');
+        chartStr = chartStr.replace(/subgraph\s+([A-Za-z0-9_]+)\s+\[(.*?)\]/g, 'subgraph $1 ["$2"]');
         return <MermaidRenderer chartStr={chartStr} setSelectedImage={setSelectedImage} />;
       }
-      return !inline ? (
-        <pre className="bg-zinc-950 p-4 rounded-lg overflow-x-auto border border-zinc-800">
-          <code className={className} {...props}>
+      
+      const isBlock = match || String(children).includes('\n');
+      
+      if (isBlock) {
+        return (
+          <code className={`${className || ''} text-zinc-300 font-mono text-[13px]`} {...props}>
             {children}
           </code>
-        </pre>
-      ) : (
+        );
+      }
+      
+      return (
         <code className="bg-zinc-800 text-zinc-200 px-1.5 py-0.5 rounded text-[13px] font-mono border border-zinc-700" {...props}>
           {children}
         </code>
-      )
+      );
     },
     img({node, src, alt, ...props}: any) {
       return (
@@ -213,11 +263,11 @@ export default function ChatInterface() {
       useAppStore.getState().setQuizRequired(false);
       
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        let systemMsg = `[System Action]: The user has completed the mandatory quiz for module '${moduleName}' with score ${score}. The syllabus has been updated.`;
+        let systemMsg = `[System Action]: The user has completed the mandatory quiz for module '${moduleName}' with score ${score}. The syllabus has been updated. DO NOT TRIGGER THE QUIZ AGAIN for this topic.`;
         if (wrongTopics.length > 0) {
-          systemMsg += ` Remedial topics were added for: ${wrongTopics.join(', ')}. Teach these remedial topics before moving to the next module.`;
+          systemMsg += ` Remedial topics were added for: ${wrongTopics.join(', ')}. Transfer to the theory_agent or coding_agent to teach these remedial topics.`;
         } else {
-          systemMsg += ` The student passed with no wrong answers. Proceed to teach the next topic in the syllabus.`;
+          systemMsg += ` The student passed. Proceed to teach the next pending topic in the syllabus by transferring to theory_agent or coding_agent.`;
         }
         wsRef.current.send(JSON.stringify({
           prompt: systemMsg,
@@ -351,7 +401,7 @@ export default function ChatInterface() {
                   </div>
                 ) : msg.response && (
                    <ReactMarkdown 
-                     remarkPlugins={[remarkGfm]}
+                     remarkPlugins={[remarkGfm, remarkBreaks]}
                      components={markdownComponents}
                    >
                      {msg.response}
@@ -387,23 +437,56 @@ export default function ChatInterface() {
             </div>
           </div>
         )}
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto relative group pointer-events-auto">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={quizRequired ? '🔒 Complete the quiz to continue...' : 'Ask a question...'}
-            className={`w-full bg-zinc-900 border rounded-xl px-5 py-3.5 pr-14 text-sm text-zinc-100 focus:outline-none transition-colors shadow-sm ${quizRequired ? 'border-amber-500/50 bg-amber-950/10 cursor-not-allowed' : 'border-zinc-800 focus:border-zinc-600'}`}
-            disabled={isStreaming || quizRequired}
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || isStreaming || quizRequired}
-            className="absolute right-2 top-2 bottom-2 aspect-square bg-zinc-100 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-900 rounded-lg flex items-center justify-center transition-colors"
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </form>
+        {chatHistory.length === 0 ? (
+          <div className="max-w-3xl mx-auto flex justify-center pointer-events-auto pb-4">
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && !isStreaming) {
+                  const startMsg = "Please introduce the syllabus and start the first topic.";
+                  addChatMessage({
+                    id: Date.now().toString(),
+                    agent: 'user',
+                    response: startMsg,
+                    timestamp: new Date().toISOString()
+                  });
+                  addChatMessage({
+                    id: Date.now().toString() + '_ai',
+                    agent: 'ai_tutor',
+                    response: '',
+                    timestamp: new Date().toISOString()
+                  });
+                  setIsStreaming(true);
+                  setStreamingStatus('Analyzing...');
+                  wsRef.current.send(JSON.stringify({ prompt: startMsg }));
+                }
+              }}
+              disabled={isStreaming}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-3 px-8 rounded-xl shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all flex items-center gap-2"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              Start Course
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="max-w-3xl mx-auto relative group pointer-events-auto">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={quizRequired ? '🔒 Complete the quiz to continue...' : 'Ask a question...'}
+              className={`w-full bg-zinc-900 border rounded-xl px-5 py-3.5 pr-14 text-sm text-zinc-100 focus:outline-none transition-colors shadow-sm ${quizRequired ? 'border-amber-500/50 bg-amber-950/10 cursor-not-allowed' : 'border-zinc-800 focus:border-zinc-600'}`}
+              disabled={isStreaming || quizRequired}
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || isStreaming || quizRequired}
+              className="absolute right-2 top-2 bottom-2 aspect-square bg-zinc-100 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-900 rounded-lg flex items-center justify-center transition-colors"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
+        )}
         <div className="text-center mt-3 text-[10px] text-zinc-500 pointer-events-auto">
           AI Tutor can make mistakes. Please verify important information.
         </div>

@@ -135,8 +135,88 @@ def trigger_topic_quiz(topic_name: str, tool_context: ToolContext = None) -> dic
     Args:
         topic_name: The name of the topic the user just finished learning.
     """
+    import json
+    session_id = getattr(tool_context, 'session_id', None) if tool_context else None
+    if not session_id and tool_context:
+        session_id = tool_context.state.get("session_id")
+        
+    if session_id:
+        paths = db_manager.get_learning_paths(tool_context.state.get("current_user_id"))
+        current_path = next((p for p in paths if p['session_id'] == session_id), None)
+        if current_path and current_path.get('syllabus'):
+            try:
+                syllabus_data = json.loads(current_path['syllabus'])
+                syllabus_list = syllabus_data.get("syllabus", syllabus_data.get("modules", syllabus_data)) if isinstance(syllabus_data, dict) else syllabus_data
+                for module in syllabus_list:
+                    if topic_name in module.get("completed_topics", []):
+                        return {
+                            "error": f"The quiz for '{topic_name}' has ALREADY BEEN COMPLETED by the user. DO NOT trigger it again. Your task is to teach the next pending topic in the syllabus."
+                        }
+            except:
+                pass
+                
     return {
         "status": "quiz_triggered",
         "message": f"A mandatory quiz for '{topic_name}' has been activated. The student's chat is now locked until they complete the quiz. Do NOT teach any new content until the quiz is completed and you receive a system message confirming the results.",
         "_internal_action": "open_quiz"
     }
+
+def mark_topic_taught(topic_name: str, tool_context: ToolContext = None) -> dict:
+    """
+    Marks a topic as taught in the syllabus.
+    Call this ONLY when you have finished explaining a topic and the user has no more questions.
+    After calling this, you can proceed to call the assessment_agent to trigger a quiz.
+    
+    Args:
+        topic_name: The name of the topic the user just finished learning.
+    """
+    import json
+    session_id = getattr(tool_context, 'session_id', None) if tool_context else None
+    if not session_id and tool_context:
+        session_id = tool_context.state.get("session_id")
+        
+    if not session_id:
+        return {"error": "No session ID found."}
+        
+    user_id = tool_context.state.get("current_user_id")
+    paths = db_manager.get_learning_paths(user_id)
+    current_path = next((p for p in paths if p['session_id'] == session_id), None)
+    
+    if not current_path or not current_path.get('syllabus'):
+        return {"error": "Syllabus not found."}
+        
+    try:
+        syllabus_data = json.loads(current_path['syllabus'])
+        syllabus_list = syllabus_data.get("syllabus", syllabus_data.get("modules", syllabus_data)) if isinstance(syllabus_data, dict) else syllabus_data
+        
+        found = False
+        for module in syllabus_list:
+            for t in module.get("topics", []):
+                if isinstance(t, dict):
+                    t_title = t.get('title', '')
+                    if topic_name.lower() in t_title.lower() or t_title.lower() in topic_name.lower():
+                        t["taught"] = True
+                        found = True
+                        break
+            if found:
+                break
+                
+        if found:
+            # Re-wrap
+            if isinstance(syllabus_data, dict) and "syllabus" in syllabus_data:
+                syllabus_data["syllabus"] = syllabus_list
+            elif isinstance(syllabus_data, dict) and "modules" in syllabus_data:
+                syllabus_data["modules"] = syllabus_list
+            else:
+                syllabus_data = syllabus_list
+                
+            db_manager.update_learning_path_details(session_id, json.dumps(syllabus_data))
+            return {
+                "success": True,
+                "message": f"Successfully marked '{topic_name}' as taught. You may now trigger the quiz by transferring to assessment_agent."
+            }
+        else:
+            return {"error": f"Topic '{topic_name}' not found in syllabus."}
+            
+    except Exception as e:
+        return {"error": f"Failed to parse syllabus: {str(e)}"}

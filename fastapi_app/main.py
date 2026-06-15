@@ -4,6 +4,11 @@ import json
 import uuid
 from typing import Optional
 from contextlib import asynccontextmanager
+
+# Disable OpenTelemetry tracing — fixes RecursionError in Python 3.14
+# caused by contextlib.__aexit__ incompatibility with OTEL span generators
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +21,9 @@ from ai_tutor_agent.utils.db_manager import db_manager
 from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
-load_dotenv("ai_tutor_agent/.env", override=True)
+load_dotenv(".env")                              # root .env — DATABASE_URI, ACTIVE_MODE, model config
+load_dotenv("ai_tutor_agent/.env", override=True) # agent .env — can override if needed
+
 
 db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'ai_tutor.db'))
 db_url = os.getenv("DATABASE_URI", f"sqlite:///{db_path}")
@@ -213,10 +220,24 @@ async def quiz_answer(req: QuizAnswerRequest):
                     match_found = False
                     if req.module_name.lower() in m_title.lower() or m_title.lower() in req.module_name.lower():
                         match_found = True
+                        m["completed"] = True
+                        m["status"] = "completed"
+                        for idx_t, t in enumerate(topics):
+                            if isinstance(t, str):
+                                topics[idx_t] = {"title": t, "completed": True}
+                            elif isinstance(t, dict):
+                                t["completed"] = True
+                        syllabus_updated = True
                     else:
-                        for t in topics:
-                            if req.module_name.lower() in t.lower() or t.lower() in req.module_name.lower():
+                        for idx_t, t in enumerate(topics):
+                            t_title = t.get("title", "") if isinstance(t, dict) else t
+                            if req.module_name.lower() in t_title.lower() or t_title.lower() in req.module_name.lower():
                                 match_found = True
+                                if isinstance(t, str):
+                                    topics[idx_t] = {"title": t, "completed": True}
+                                elif isinstance(t, dict):
+                                    t["completed"] = True
+                                syllabus_updated = True
                                 break
                                 
                     if match_found:
@@ -225,6 +246,22 @@ async def quiz_answer(req: QuizAnswerRequest):
                             m["completed_topics"] = []
                         if req.module_name not in m["completed_topics"]:
                             m["completed_topics"].append(req.module_name)
+                            syllabus_updated = True
+                            
+                        # Check if all topics in this module are now completed
+                        all_completed = True
+                        for t in topics:
+                            if isinstance(t, str):
+                                if t not in m.get("completed_topics", []):
+                                    all_completed = False
+                                    break
+                            elif isinstance(t, dict) and not t.get("completed"):
+                                all_completed = False
+                                break
+                                
+                        if all_completed and len(topics) > 0:
+                            m["status"] = "completed"
+                            m["completed"] = True
                             syllabus_updated = True
                             
                         # We don't mark the whole module as completed unless they finished the whole module,
@@ -241,8 +278,12 @@ async def quiz_answer(req: QuizAnswerRequest):
                     "module": f"Remedial: {topic}",
                     "title": f"Remedial: {topic}",
                     "status": "pending",
+                    "completed": False,
                     "subtopics": [f"Review: {topic}", "Practice exercises"],
-                    "topics": [f"Review: {topic}", "Practice exercises"]
+                    "topics": [
+                        {"title": f"Review: {topic}", "completed": False}, 
+                        {"title": "Practice exercises", "completed": False}
+                    ]
                 }
                 syllabus_list.insert(insert_idx + remedials_added, remedial_module)
                 remedials_added += 1
@@ -255,8 +296,12 @@ async def quiz_answer(req: QuizAnswerRequest):
                     "module": f"Remedial: {remedial_topic}",
                     "title": f"Remedial: {remedial_topic}",
                     "status": "pending",
+                    "completed": False,
                     "subtopics": [f"Review: {remedial_topic}", "Practice exercises"],
-                    "topics": [f"Review: {remedial_topic}", "Practice exercises"]
+                    "topics": [
+                        {"title": f"Review: {remedial_topic}", "completed": False}, 
+                        {"title": "Practice exercises", "completed": False}
+                    ]
                 })
                 syllabus_updated = True
             
@@ -292,7 +337,8 @@ async def get_chat_history(session_id: str, user_id: str):
 
 @app.post("/api/chat/settings/model")
 async def update_model_settings(req: ModelSettingRequest):
-    # Ideally update environment variables or llm_config globally
+    from ai_tutor_agent.utils.llm_config import switch_all_agents_model
+    switch_all_agents_model(req.mode)
     return {"status": "updated", "mode": req.mode}
 
 # ======== WEBSOCKET ========
@@ -346,11 +392,52 @@ async def websocket_chat(websocket: WebSocket, session_id: str, user_id: str):
             if not hidden:
                 db_manager.log_interaction(session_id, user_id, "user", prompt, "")
 
-            # Context injection for the first message in session
+            # Always fetch latest path to ensure syllabus updates are reflected
+            paths = db_manager.get_learning_paths(user_id)
+            current_path = next((p for p in paths if p['session_id'] == session_id), None)
+            
             final_prompt = prompt
-            if not context_injected and current_path and current_path.get('syllabus'):
-                final_prompt = f"[System: Active Syllabus context:\n{current_path['syllabus']}]\n\n{prompt}"
-                context_injected = True
+            if current_path and current_path.get('syllabus'):
+                try:
+                    syl_data = json.loads(current_path['syllabus'])
+                    syl_list = syl_data.get("syllabus", syl_data.get("modules", syl_data))
+                    syl_text = "Syllabus Outline:\n"
+                    first_incomplete_topic = None
+                    first_incomplete_status = None
+                    for idx, mod in enumerate(syl_list if isinstance(syl_list, list) else []):
+                        m_status = '[Completed]' if mod.get('completed') else '[Pending]'
+                        syl_text += f"Module {idx+1}: {mod.get('title', mod.get('module', 'Unknown'))} {m_status}\n"
+                        for t in mod.get('topics', []):
+                            if isinstance(t, dict):
+                                t_title = t.get('title', 'Unknown')
+                                if t.get('completed'):
+                                    t_status = '[Completed]'
+                                elif t.get('taught'):
+                                    t_status = '[Taught]'
+                                else:
+                                    t_status = '[Pending]'
+                            else:
+                                t_title = t
+                                t_status = '[Completed]' if t in mod.get('completed_topics', []) else '[Pending]'
+                                
+                            syl_text += f"  - {t_title} {t_status}\n"
+                            
+                            if t_status in ('[Pending]', '[Taught]') and not first_incomplete_topic:
+                                first_incomplete_topic = t_title
+                                first_incomplete_status = t_status
+                except Exception:
+                    syl_text = current_path['syllabus'] # fallback
+                    first_incomplete_topic = None
+                    first_incomplete_status = None
+                    
+                enforcement_msg = ""
+                if first_incomplete_topic:
+                    if first_incomplete_status == '[Pending]':
+                        enforcement_msg = f"\n\n<orchestrator_routing_rules>\nCRITICAL RULE FOR AI_TUTOR ORCHESTRATOR ONLY: The next topic is '{first_incomplete_topic}' ([Pending]). You MUST teach this topic. Once you finish explaining it, ask if the user has questions. DO NOT trigger a quiz. Once they have no more questions, call the `mark_topic_taught` tool.\nIF YOU ARE A SUB-AGENT (e.g. visualization_agent, theory_agent), IGNORE THIS RULE.\n</orchestrator_routing_rules>"
+                    elif first_incomplete_status == '[Taught]':
+                        enforcement_msg = f"\n\n<orchestrator_routing_rules>\nCRITICAL RULE FOR AI_TUTOR ORCHESTRATOR ONLY: The topic '{first_incomplete_topic}' is currently marked as [Taught]. You MUST IMMEDIATELY transfer to `assessment_agent` to trigger the quiz. Do NOT ask for permission. Do NOT teach the next topic.\nIF YOU ARE A SUB-AGENT (e.g. visualization_agent), IGNORE THIS RULE ENTIRELY. DO NOT OUTPUT ANY TEXT ABOUT TRIGGERING A QUIZ.\n</orchestrator_routing_rules>"
+                    
+                final_prompt = f"[System: Active Syllabus context:\n{syl_text}{enforcement_msg}]\n\n{prompt}"
 
             message = types.Content(role="user", parts=[types.Part(text=final_prompt)])
             full_response = ""
@@ -358,18 +445,31 @@ async def websocket_chat(websocket: WebSocket, session_id: str, user_id: str):
 
             try:
                 async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=message):
-                    # Check for tool calls / routing to update status pills
                     func_calls = event.get_function_calls() if hasattr(event, 'get_function_calls') else []
+                    func_calls = list(func_calls) if func_calls else []
+                    
+                    if hasattr(event, 'content') and event.content and hasattr(event.content, 'parts') and event.content.parts:
+                        for part in event.content.parts:
+                            if hasattr(part, 'function_call') and part.function_call:
+                                if part.function_call not in func_calls:
+                                    func_calls.append(part.function_call)
+
                     if func_calls:
                         for call in func_calls:
                             if call.name == "transfer_to_agent":
-                                agent_name = call.args.get("agent_name", "specialist") if hasattr(call, 'args') and isinstance(call.args, dict) else "specialist"
+                                agent_name = call.args.get("agent_name", "specialist") if hasattr(call.args, 'get') else "specialist"
                                 display_name = agent_name.replace("_", " ").title()
                                 await websocket.send_json({"type": "status", "content": f"Consulting {display_name}..."})
                             elif call.name == "trigger_topic_quiz":
                                 module_name = "Unknown Topic"
-                                if hasattr(call, 'args') and isinstance(call.args, dict):
-                                    module_name = call.args.get("topic_name", call.args.get("module_name", "Unknown Topic"))
+                                if hasattr(call, 'args'):
+                                    if hasattr(call.args, 'get'):
+                                        module_name = call.args.get("topic_name", call.args.get("module_name", "Unknown Topic"))
+                                    elif hasattr(call.args, 'fields'):
+                                        fields = call.args.fields
+                                        topic = fields.get("topic_name") or fields.get("module_name")
+                                        if topic:
+                                            module_name = getattr(topic, 'string_value', "Unknown Topic")
                                 # Set quiz pending in DB — this blocks future chat messages
                                 db_manager.set_quiz_pending(session_id, module_name)
                                 await websocket.send_json({"type": "status", "content": f"Preparing Mandatory Quiz for {module_name}..."})
@@ -379,14 +479,19 @@ async def websocket_chat(websocket: WebSocket, session_id: str, user_id: str):
                     
                     if hasattr(event, 'content') and event.content and hasattr(event.content, 'parts') and event.content.parts:
                         for part in event.content.parts:
-                            if hasattr(part, 'text') and part.text:
-                                full_response += part.text
-                                await websocket.send_json({
-                                    "type": "chunk", 
-                                    "content": part.text,
-                                    "author": event.author
-                                })
-                                current_agent = event.author
+                            if hasattr(part, 'function_call') and part.function_call:
+                                continue # Skip to avoid Gemini SDK .text warning
+                            try:
+                                if hasattr(part, 'text') and part.text:
+                                    full_response += part.text
+                                    await websocket.send_json({
+                                        "type": "chunk", 
+                                        "content": part.text,
+                                        "author": event.author
+                                    })
+                                    current_agent = event.author
+                            except Exception:
+                                pass
             except Exception as e:
                 await websocket.send_json({"type": "chunk", "content": f"\n\nError: {str(e)}", "author": "system"})
 
