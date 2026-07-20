@@ -9,7 +9,7 @@
 
 | | |
 |---|---|
-| **Student Name** | Bhaskar Dey |
+| **Student Name** | Ayan Bhunia |
 | **Roll Number** | *(Enter Roll Number)* |
 | **Department** | Computer Science & Engineering |
 | **Academic Year** | 2025–2026 |
@@ -29,7 +29,7 @@
 
 ## CERTIFICATE
 
-This is to certify that the project work entitled **"AI Tutor: A Multi-Agent Intelligent Tutoring System with Enforced Mastery Progression"** has been carried out by **Bhaskar Dey** under my guidance in partial fulfilment of the requirements for the award of the degree of Bachelor of Technology in Computer Science & Engineering.
+This is to certify that the project work entitled **"AI Tutor: A Multi-Agent Intelligent Tutoring System with Enforced Mastery Progression"** has been carried out by **Ayan Bhunia** under my guidance in partial fulfilment of the requirements for the award of the degree of Bachelor of Technology in Computer Science & Engineering.
 
 The project work is original and has not been submitted elsewhere for the award of any degree or diploma.
 
@@ -60,7 +60,7 @@ I hereby declare that the project work entitled **"AI Tutor: A Multi-Agent Intel
 
 &nbsp;
 
-**Bhaskar Dey**
+**Ayan Bhunia**
 *(Roll Number)*
 *(Date)*
 
@@ -80,7 +80,7 @@ Finally, I thank my family and peers for their constant support.
 
 &nbsp;
 
-**Bhaskar Dey**
+**Ayan Bhunia**
 
 ---
 
@@ -1838,4 +1838,4 @@ A production-ready deployment would require: replacing SQLite with PostgreSQL (m
 
 *This project report was prepared as the final year project submission for the Bachelor of Technology degree in Computer Science & Engineering. The system described herein — including all source code, documentation, and supporting materials — was developed solely by the student under the guidance of the supervising faculty.*
 
-*GitHub Repository: [AI-Tutor](https://github.com/bhaskar966/AI-Tutor) *(if applicable)*
+*GitHub Repository: [AI-Tutor](https://github.com/bhaskar966/AI-Tutor---Multi-Agent-Learning-Platform) *(if applicable)*
