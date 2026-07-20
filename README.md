@@ -110,7 +110,7 @@ You also need **one of** the following LLM backends:
 
 ```bash
 git clone https://github.com/iayanbhunia/AI-Tutor---Multi-Agent-Learning-Platform.git
-cd AI-Tutor
+cd AI-Tutor---Multi-Agent-Learning-Platform
 ```
 
 ---
