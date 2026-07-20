@@ -35,7 +35,7 @@ The project work is original and has not been submitted elsewhere for the award 
 
 &nbsp;
 
-**Project Guide**
+**Project Guider**
 *(Name, Designation, Department)*
 
 &nbsp;

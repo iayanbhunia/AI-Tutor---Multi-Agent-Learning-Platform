@@ -10,6 +10,7 @@ mermaid.initialize({
   startOnLoad: false,
   theme: 'default',
   securityLevel: 'loose',
+  suppressErrorRendering: true,
 });
 
 class ErrorBoundary extends React.Component<{children: React.ReactNode, fallback?: React.ReactNode}, {hasError: boolean, error: any}> {
